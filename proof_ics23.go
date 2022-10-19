@@ -1,6 +1,7 @@
 package iavl
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -165,4 +166,139 @@ func convertInnerOps(path PathToLeaf) []*ics23.InnerOp {
 func convertVarIntToBytes(orig int64, buf [binary.MaxVarintLen64]byte) []byte {
 	n := binary.PutVarint(buf[:], orig)
 	return buf[:n]
+}
+
+// GetProof gets the proof for the given key.
+func (t *ImmutableTree) GetProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
+	if t.root == nil {
+		return nil, fmt.Errorf("cannot generate the proof with nil root")
+	}
+
+	exist, err := t.Has(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if exist {
+		return t.GetMembershipProofWithKey(key)
+	} else {
+		return t.GetNonMembershipProofWithKey(key)
+	}
+}
+
+// GetProof gets the proof for the given key.
+func (t *ImmutableTree) GetMembershipProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
+	proofs := []*ics23.CommitmentProof{}
+
+	exist, keys, err := t.createExistenceProofWithKey(key)
+	if err != nil {
+		return nil, err
+	}
+
+	proofs = append(proofs, &ics23.CommitmentProof{
+		Proof: &ics23.CommitmentProof_Exist{
+			Exist: exist,
+		},
+	})
+
+	for i := range keys {
+		if bytes.Equal(key, keys[i]) {
+			continue
+		}
+		p, err := t.GetMembershipProof(keys[i])
+		if err != nil {
+			return nil, err
+		}
+		proofs = append(proofs, p)
+	}
+
+	return proofs, nil
+}
+
+func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
+	proofs := []*ics23.CommitmentProof{}
+
+	// idx is one node right of what we want....
+	var err error
+	idx, val, err := t.GetWithIndex(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if val != nil {
+		return nil, fmt.Errorf("cannot create NonExistanceProof when Key in State")
+	}
+
+	nonexist := &ics23.NonExistenceProof{
+		Key: key,
+	}
+
+	dupkey := KeysMap{}
+	keys := KeysMap{}
+	if idx >= 1 {
+		leftkey, _, err := t.GetByIndex(idx - 1)
+		if err != nil {
+			return nil, err
+		}
+		var pkeys [][]byte
+		nonexist.Left, pkeys, err = t.createExistenceProofWithKey(leftkey)
+		if err != nil {
+			return nil, err
+		}
+		dupkey.Set(leftkey)
+		keys.SetKeys(pkeys)
+	}
+
+	// this will be nil if nothing right of the queried key
+	rightkey, _, err := t.GetByIndex(idx)
+	if err != nil {
+		return nil, err
+	}
+
+	if rightkey != nil {
+		var pkeys [][]byte
+		nonexist.Right, pkeys, err = t.createExistenceProofWithKey(rightkey)
+		if err != nil {
+			return nil, err
+		}
+		dupkey.Set(rightkey)
+		keys.SetKeys(pkeys)
+	}
+
+	proofs = append(proofs, &ics23.CommitmentProof{
+		Proof: &ics23.CommitmentProof_Nonexist{
+			Nonexist: nonexist,
+		},
+	})
+
+	for _, k := range keys.List() {
+		if dupkey.Has(k) {
+			continue
+		}
+		p, err := t.GetMembershipProof(k)
+		if err != nil {
+			return nil, err
+		}
+		proofs = append(proofs, p)
+	}
+
+	return proofs, nil
+}
+
+func (t *ImmutableTree) createExistenceProofWithKey(key []byte) (*ics23.ExistenceProof, [][]byte, error) {
+	_, err := t.Hash()
+	if err != nil {
+		return nil, nil, err
+	}
+	path, node, keys, err := t.root.PathToLeafWithKeys(t, key)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return &ics23.ExistenceProof{
+		Key:   node.key,
+		Value: node.value,
+		Leaf:  convertLeafOp(node.version),
+		Path:  convertInnerOps(path),
+	}, keys, err
 }
