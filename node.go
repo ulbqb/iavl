@@ -468,6 +468,21 @@ func (node *Node) writeBytes(w io.Writer) error {
 func (node *Node) getLeftNode(t *ImmutableTree) (*Node, error) {
 	if node.leftNode != nil {
 		return node.leftNode, nil
+	} else if t.ndb.oracle != nil {
+		leftNode, accessed := t.ndb.oracle.GetNode(node.leftHash)
+		if accessed {
+			panic("something wrong")
+		}
+
+		err := t.saveNode(leftNode)
+		if err != nil {
+			return nil, err
+		}
+		err = t.recursiveNodeLink(node)
+		if err != nil {
+			return nil, err
+		}
+		return node.leftNode, nil
 	}
 	leftNode, err := t.ndb.GetNode(node.leftHash)
 	if err != nil {
@@ -479,6 +494,21 @@ func (node *Node) getLeftNode(t *ImmutableTree) (*Node, error) {
 
 func (node *Node) getRightNode(t *ImmutableTree) (*Node, error) {
 	if node.rightNode != nil {
+		return node.rightNode, nil
+	} else if t.ndb.oracle != nil {
+		rightNode, accessed := t.ndb.oracle.GetNode(node.rightHash)
+		if accessed {
+			panic("something wrong")
+		}
+
+		err := t.saveNode(rightNode)
+		if err != nil {
+			return nil, err
+		}
+		err = t.recursiveNodeLink(node)
+		if err != nil {
+			return nil, err
+		}
 		return node.rightNode, nil
 	}
 	rightNode, err := t.ndb.GetNode(node.rightHash)
