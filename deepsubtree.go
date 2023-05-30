@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	ics23 "github.com/confio/ics23/go"
@@ -23,6 +24,13 @@ type DeepSubTree struct {
 	initialRootHash  []byte        // Initial Root Hash when Deep Subtree is initialized for an already existing tree
 	witnessData      []WitnessData // Represents a trace operation along with inclusion proofs required for said operation
 	operationCounter int           // Keeps track of which operation in the witness data list the Deep Subtree is on
+	// new
+	oracle    OracleClient
+	storeName string
+}
+
+type OracleClient interface {
+	Get([]byte) []byte
 }
 
 // NewDeepSubTree returns a new deep subtree with the specified cache size, datastore, and version.
@@ -41,6 +49,23 @@ func NewDeepSubTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, versi
 		skipFastStorageUpgrade:   skipFastStorageUpgrade,
 	}
 	return &DeepSubTree{MutableTree: mutableTree, initialRootHash: nil, witnessData: nil, operationCounter: 0}
+}
+
+func NewDeepSubTree2(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracle OracleClient, storeName string) *DeepSubTree {
+	ndb := newNodeDB(db, cacheSize, nil)
+	head := &ImmutableTree{ndb: ndb, version: version, skipFastStorageUpgrade: skipFastStorageUpgrade}
+	mutableTree := &MutableTree{
+		ImmutableTree:            head,
+		lastSaved:                head.clone(),
+		orphans:                  map[string]int64{},
+		versions:                 map[int64]bool{},
+		allRootLoaded:            false,
+		unsavedFastNodeAdditions: make(map[string]*FastNode),
+		unsavedFastNodeRemovals:  make(map[string]interface{}),
+		ndb:                      ndb,
+		skipFastStorageUpgrade:   skipFastStorageUpgrade,
+	}
+	return &DeepSubTree{MutableTree: mutableTree, initialRootHash: nil, witnessData: nil, operationCounter: 0, oracle: oracle, storeName: storeName}
 }
 
 // Setter for witness data. Also, resets the operation counter back to 0.
@@ -156,7 +181,7 @@ func (dst *DeepSubTree) verifyOperationAndProofs(operation Operation, key []byte
 	if traceOp.Operation != operation || !bytes.Equal(traceOp.Key, key) || !bytes.Equal(traceOp.Value, value) {
 		return fmt.Errorf(
 			"traceOp in witnessData (%s, %s, %s) does not match up with executed operation (%s, %s, %s)",
-			traceOp.Operation, string(traceOp.Key), string(traceOp.Value), 
+			traceOp.Operation, string(traceOp.Key), string(traceOp.Value),
 			operation, string(key), string(value),
 		)
 	}
@@ -180,9 +205,23 @@ func (dst *DeepSubTree) verifyOperationAndProofs(operation Operation, key []byte
 	return nil
 }
 
+func (dst *DeepSubTree) addProofs(key []byte) error {
+	p := dst.oracle.Get([]byte(fmt.Sprintf("store?path=%s&data=%s", url.PathEscape(path), key)))
+	traceOp := dst.witnessData[dst.operationCounter]
+	storeProof := traceOp.Proofs[len(traceOp.Proofs)-1]
+	traceOp.Proofs = traceOp.Proofs[:len(traceOp.Proofs)-1]
+	rootHash := storeProof.Value
+	err := dst.AddExistenceProofs(traceOp.Proofs, rootHash)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // Verifies the Set operation with witness data and perform the given write operation
 func (dst *DeepSubTree) Set(key []byte, value []byte) (updated bool, err error) {
-	err = dst.verifyOperationAndProofs("write", key, value)
+	// err = dst.verifyOperationAndProofs("write", key, value)
+	err = dst.addProofs(key)
 	if err != nil {
 		return false, err
 	}
