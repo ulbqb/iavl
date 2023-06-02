@@ -2,7 +2,6 @@ package iavl
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"strings"
@@ -11,22 +10,23 @@ import (
 	dbm "github.com/tendermint/tm-db"
 )
 
-const (
-	// lengthByte is the length prefix prepended to each of the sha256 sub-hashes
-	lengthByte byte = 0x20
-)
-
 // Represents a IAVL Deep Subtree that can contain
 // a subset of nodes of an IAVL tree
-type DeepSubTree struct {
+type WitnessTree struct {
 	*MutableTree
 	initialRootHash  []byte        // Initial Root Hash when Deep Subtree is initialized for an already existing tree
 	witnessData      []WitnessData // Represents a trace operation along with inclusion proofs required for said operation
 	operationCounter int           // Keeps track of which operation in the witness data list the Deep Subtree is on
+	// new
+	oracle    OracleClient
+	storeName string
 }
 
-// NewDeepSubTree returns a new deep subtree with the specified cache size, datastore, and version.
-func NewDeepSubTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64) *DeepSubTree {
+type OracleClient interface {
+	GetProof(string, string) []*ics23.ExistenceProof
+}
+
+func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracle OracleClient, storeName string) *WitnessTree {
 	ndb := newNodeDB(db, cacheSize, nil)
 	head := &ImmutableTree{ndb: ndb, version: version, skipFastStorageUpgrade: skipFastStorageUpgrade}
 	mutableTree := &MutableTree{
@@ -40,18 +40,21 @@ func NewDeepSubTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, versi
 		ndb:                      ndb,
 		skipFastStorageUpgrade:   skipFastStorageUpgrade,
 	}
-	return &DeepSubTree{MutableTree: mutableTree, initialRootHash: nil, witnessData: nil, operationCounter: 0}
+	proofs := oracle.GetProof(fmt.Sprintf("%s/key", storeName), "roothash")
+	rootHash := proofs[len(proofs)-1].Value
+	fmt.Printf("#4 getting %s store root hash: %v\n", storeName, rootHash)
+	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash, witnessData: nil, operationCounter: 0, oracle: oracle, storeName: storeName}
 }
 
 // Setter for witness data. Also, resets the operation counter back to 0.
-func (dst *DeepSubTree) SetWitnessData(witnessData []WitnessData) {
+func (dst *WitnessTree) SetWitnessData(witnessData []WitnessData) {
 	dst.witnessData = witnessData
 	dst.operationCounter = 0
 }
 
 // Returns the initial root hash if it is initialized and Deep Subtree root is nil.
 // Otherwise, returns the Deep Subtree working hash is considered the initial root hash.
-func (dst *DeepSubTree) GetInitialRootHash() ([]byte, error) {
+func (dst *WitnessTree) GetInitialRootHash() ([]byte, error) {
 	if dst.root == nil && dst.initialRootHash != nil {
 		return dst.initialRootHash, nil
 	}
@@ -59,23 +62,14 @@ func (dst *DeepSubTree) GetInitialRootHash() ([]byte, error) {
 }
 
 // Setter for initial root hash
-func (dst *DeepSubTree) SetInitialRootHash(initialRootHash []byte) {
+func (dst *WitnessTree) SetInitialRootHash(initialRootHash []byte) {
 	dst.initialRootHash = initialRootHash
-}
-
-func (node *Node) updateInnerNodeKey() {
-	if node.leftNode != nil {
-		node.key = node.leftNode.getHighestKey()
-	}
-	if node.rightNode != nil {
-		node.key = node.rightNode.getLowestKey()
-	}
 }
 
 // Traverses the nodes in the NodeDB that are part of Deep Subtree
 // and links them together using the populated left and right
 // hashes and sets the root to be the node with the given rootHash
-func (dst *DeepSubTree) buildTree(rootHash []byte) error {
+func (dst *WitnessTree) buildTree(rootHash []byte) error {
 	workingHash, err := dst.WorkingHash()
 	if err != nil {
 		return err
@@ -125,7 +119,7 @@ func (dst *DeepSubTree) buildTree(rootHash []byte) error {
 // If already linked, return an error in case connection was made incorrectly
 // Note: GetNode returns nil if the node with the hash passed into it does not exist
 // which is expected with a deep subtree.
-func (dst *DeepSubTree) linkNode(node *Node) error {
+func (dst *WitnessTree) linkNode(node *Node) error {
 	if len(node.leftHash) > 0 {
 		if node.leftNode == nil {
 			node.leftNode, _ = dst.ndb.GetNode(node.leftHash)
@@ -141,7 +135,7 @@ func (dst *DeepSubTree) linkNode(node *Node) error {
 
 // Verifies the given operation matches up with the witness data.
 // Also, verifies and adds existence proofs related to the operation.
-func (dst *DeepSubTree) verifyOperationAndProofs(operation Operation, key []byte, value []byte) error {
+func (dst *WitnessTree) verifyOperationAndProofs(operation Operation, key []byte, value []byte) error {
 	if dst.witnessData == nil {
 		return errors.New("witness data in deep subtree is nil")
 	}
@@ -167,6 +161,7 @@ func (dst *DeepSubTree) verifyOperationAndProofs(operation Operation, key []byte
 
 	// Verify proofs against current rootHash
 	for _, proof := range traceOp.Proofs {
+		fmt.Printf("key: %v value: %v key: %v value: %v\n", key, value, proof.Key, proof.Value)
 		err := proof.Verify(ics23.IavlSpec, rootHash, proof.Key, proof.Value)
 		if err != nil {
 			return err
@@ -180,9 +175,36 @@ func (dst *DeepSubTree) verifyOperationAndProofs(operation Operation, key []byte
 	return nil
 }
 
+func (dst *WitnessTree) addProofs(key []byte, value []byte) error {
+	proofs := dst.oracle.GetProof(fmt.Sprintf("%s/key", dst.storeName), string(key))
+	proofs = proofs[:len(proofs)-1]
+	rootHash, err := dst.GetInitialRootHash()
+	if err != nil {
+		return err
+	}
+	// Verify proofs against current rootHash
+	for _, proof := range proofs {
+		fmt.Printf("value: %v %v\n", value, proof.Value)
+		err := proof.Verify(ics23.IavlSpec, rootHash, proof.Key, proof.Value)
+		if err != nil {
+			fmt.Printf("errlog: %v\n", err)
+			// panic("panic!!")
+			return err
+		}
+	}
+
+	proofs = dst.convertCurrentStateProofs(proofs)
+	err = dst.AddExistenceProofs(proofs, rootHash)
+	if err != nil {
+		// panic("addProof dekite naiyo!!!!!")
+		return err
+	}
+	return nil
+}
+
 // Verifies the Set operation with witness data and perform the given write operation
-func (dst *DeepSubTree) Set(key []byte, value []byte) (updated bool, err error) {
-	err = dst.verifyOperationAndProofs("write", key, value)
+func (dst *WitnessTree) Set(key []byte, value []byte) (updated bool, err error) {
+	err = dst.addProofs(key, value)
 	if err != nil {
 		return false, err
 	}
@@ -190,7 +212,7 @@ func (dst *DeepSubTree) Set(key []byte, value []byte) (updated bool, err error) 
 }
 
 // Sets a key in the working tree with the given value.
-func (dst *DeepSubTree) set(key []byte, value []byte) (updated bool, err error) {
+func (dst *WitnessTree) set(key []byte, value []byte) (updated bool, err error) {
 	if value == nil {
 		return updated, fmt.Errorf("attempt to store nil value at key '%s'", key)
 	}
@@ -209,7 +231,7 @@ func (dst *DeepSubTree) set(key []byte, value []byte) (updated bool, err error) 
 
 // Helper method for set to traverse and find the node with given key
 // recursively.
-func (dst *DeepSubTree) recursiveSet(node *Node, key []byte, value []byte) (
+func (dst *WitnessTree) recursiveSet(node *Node, key []byte, value []byte) (
 	newSelf *Node, updated bool, err error,
 ) {
 	version := dst.version + 1
@@ -292,8 +314,8 @@ func (dst *DeepSubTree) recursiveSet(node *Node, key []byte, value []byte) (
 }
 
 // Verifies the Get operation with witness data and perform the given read operation
-func (dst *DeepSubTree) Get(key []byte) (value []byte, err error) {
-	err = dst.verifyOperationAndProofs("read", key, nil)
+func (dst *WitnessTree) Get(key []byte) (value []byte, err error) {
+	err = dst.addProofs(key, value)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +324,7 @@ func (dst *DeepSubTree) Get(key []byte) (value []byte, err error) {
 
 // Get returns the value of the specified key if it exists, or nil otherwise.
 // The returned value must not be modified, since it may point to data stored within IAVL.
-func (dst *DeepSubTree) get(key []byte) ([]byte, error) {
+func (dst *WitnessTree) get(key []byte) ([]byte, error) {
 	if dst.root == nil {
 		return nil, nil
 	}
@@ -311,8 +333,8 @@ func (dst *DeepSubTree) get(key []byte) ([]byte, error) {
 }
 
 // Verifies the Remove operation with witness data and perform the given delete operation
-func (dst *DeepSubTree) Remove(key []byte) (value []byte, removed bool, err error) {
-	err = dst.verifyOperationAndProofs("delete", key, nil)
+func (dst *WitnessTree) Remove(key []byte) (value []byte, removed bool, err error) {
+	err = dst.addProofs(key, value)
 	if err != nil {
 		return nil, false, err
 	}
@@ -321,7 +343,7 @@ func (dst *DeepSubTree) Remove(key []byte) (value []byte, removed bool, err erro
 
 // Remove tries to remove a key from the tree and if removed, returns its
 // value, and 'true'.
-func (dst *DeepSubTree) remove(key []byte) (value []byte, removed bool, err error) {
+func (dst *WitnessTree) remove(key []byte) (value []byte, removed bool, err error) {
 	if dst.root == nil {
 		return nil, false, nil
 	}
@@ -350,7 +372,7 @@ func (dst *DeepSubTree) remove(key []byte) (value []byte, removed bool, err erro
 // - the hash of the new node (or nil if the node is the one removed)
 // - the node that replaces the orig. node after remove
 // - the removed value
-func (dst *DeepSubTree) recursiveRemove(node *Node, key []byte) (newHash []byte, newSelf *Node, newValue []byte, err error) {
+func (dst *WitnessTree) recursiveRemove(node *Node, key []byte) (newHash []byte, newSelf *Node, newValue []byte, err error) {
 	version := dst.version + 1
 
 	if node.isLeaf() {
@@ -433,33 +455,10 @@ func (dst *DeepSubTree) recursiveRemove(node *Node, key []byte) (newHash []byte,
 	return nil, nil, nil, fmt.Errorf("node with key: %s not found", key)
 }
 
-func recomputeHash(node *Node) error {
-	if node.leftHash == nil && node.leftNode != nil {
-		leftHash, err := node.leftNode._hash()
-		if err != nil {
-			return err
-		}
-		node.leftHash = leftHash
-	}
-	if node.rightHash == nil && node.rightNode != nil {
-		rightHash, err := node.rightNode._hash()
-		if err != nil {
-			return err
-		}
-		node.rightHash = rightHash
-	}
-	node.hash = nil
-	_, err := node._hash()
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
 // nolint: unused
 // Prints a Deep Subtree recursively.
 // Modified version of printNode from util.go
-func (dst *DeepSubTree) printNodeDeepSubtree(node *Node, indent int) error {
+func (dst *WitnessTree) printNodeWitnessTree(node *Node, indent int) error {
 	indentPrefix := strings.Repeat("    ", indent)
 
 	if node == nil {
@@ -467,7 +466,7 @@ func (dst *DeepSubTree) printNodeDeepSubtree(node *Node, indent int) error {
 		return nil
 	}
 	if node.rightNode != nil {
-		err := dst.printNodeDeepSubtree(node.rightNode, indent+1)
+		err := dst.printNodeWitnessTree(node.rightNode, indent+1)
 		if err != nil {
 			return err
 		}
@@ -484,7 +483,7 @@ func (dst *DeepSubTree) printNodeDeepSubtree(node *Node, indent int) error {
 	}
 
 	if node.leftNode != nil {
-		err := dst.printNodeDeepSubtree(node.leftNode, indent+1)
+		err := dst.printNodeWitnessTree(node.leftNode, indent+1)
 		if err != nil {
 			return err
 		}
@@ -492,48 +491,9 @@ func (dst *DeepSubTree) printNodeDeepSubtree(node *Node, indent int) error {
 	return nil
 }
 
-// Returns the highest key in the node's subtree
-func (node *Node) getHighestKey() []byte {
-	if node.isLeaf() {
-		return node.key
-	}
-	highestKey := []byte{}
-	if node.rightNode != nil {
-		highestKey = node.rightNode.getHighestKey()
-	}
-	if node.leftNode != nil {
-		leftHighestKey := node.leftNode.getHighestKey()
-		if len(highestKey) == 0 {
-			highestKey = leftHighestKey
-		} else if string(leftHighestKey) > string(highestKey) {
-			highestKey = leftHighestKey
-		}
-	}
-	return highestKey
-}
-
-// Returns the lowest key in the node's subtree
-func (node *Node) getLowestKey() []byte {
-	if node.isLeaf() {
-		return node.key
-	}
-	lowestKey := []byte{}
-	if node.rightNode != nil {
-		lowestKey = node.rightNode.getLowestKey()
-	}
-	if node.leftNode != nil {
-		leftLowestKey := node.leftNode.getLowestKey()
-		if len(lowestKey) == 0 {
-			lowestKey = leftLowestKey
-		} else if string(leftLowestKey) < string(lowestKey) {
-			lowestKey = leftLowestKey
-		}
-	}
-	return lowestKey
-}
-
 // Adds nodes associated to the given existence proof to the underlying deep subtree
-func (dst *DeepSubTree) AddExistenceProofs(existenceProofs []*ics23.ExistenceProof, rootHash []byte) error {
+func (dst *WitnessTree) AddExistenceProofs(existenceProofs []*ics23.ExistenceProof, rootHash []byte) error {
+	fmt.Printf("proof num %d\n", len(existenceProofs))
 	for _, existenceProof := range existenceProofs {
 		err := dst.addExistenceProof(existenceProof)
 		if err != nil {
@@ -551,7 +511,7 @@ func (dst *DeepSubTree) AddExistenceProofs(existenceProofs []*ics23.ExistencePro
 	return nil
 }
 
-func (dst *DeepSubTree) saveNodeIfNeeded(node *Node) error {
+func (dst *WitnessTree) saveNodeIfNeeded(node *Node) error {
 	has, err := dst.ndb.Has(node.hash)
 	if err != nil {
 		return err
@@ -565,7 +525,7 @@ func (dst *DeepSubTree) saveNodeIfNeeded(node *Node) error {
 	return nil
 }
 
-func (dst *DeepSubTree) addExistenceProof(proof *ics23.ExistenceProof) error {
+func (dst *WitnessTree) addExistenceProof(proof *ics23.ExistenceProof) error {
 	leaf, err := fromLeafOp(proof.GetLeaf(), proof.Key, proof.Value)
 	if err != nil {
 		return err
@@ -588,121 +548,6 @@ func (dst *DeepSubTree) addExistenceProof(proof *ics23.ExistenceProof) error {
 	return nil
 }
 
-func fromLeafOp(lop *ics23.LeafOp, key, value []byte) (*Node, error) {
-	r := bytes.NewReader(lop.Prefix)
-	height, err := binary.ReadVarint(r)
-	if err != nil {
-		return nil, err
-	}
-	if height != 0 {
-		return nil, errors.New("height should be 0 in the leaf")
-	}
-	size, err := binary.ReadVarint(r)
-	if err != nil {
-		return nil, err
-	}
-	if size != 1 {
-		return nil, errors.New("size should be 1 in the leaf")
-	}
-	version, err := binary.ReadVarint(r)
-	if err != nil {
-		return nil, err
-	}
-	node := &Node{
-		key:     key,
-		value:   value,
-		size:    size,
-		version: version,
-	}
-
-	_, err = node._hash()
-	if err != nil {
-		return nil, err
-	}
-
-	return node, nil
-}
-
-func fromInnerOp(iop *ics23.InnerOp, prevHash []byte) (*Node, error) {
-	r := bytes.NewReader(iop.Prefix)
-	height, err := binary.ReadVarint(r)
-	if err != nil {
-		return nil, err
-	}
-	size, err := binary.ReadVarint(r)
-	if err != nil {
-		return nil, err
-	}
-	version, err := binary.ReadVarint(r)
-	if err != nil {
-		return nil, err
-	}
-
-	b, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-	if b != lengthByte {
-		return nil, errors.New("expected length byte (0x20")
-	}
-	var left, right []byte
-	// if left is empty, skip to right
-	if r.Len() != 0 {
-		left = make([]byte, lengthByte)
-		n, err := r.Read(left)
-		if err != nil {
-			return nil, err
-		}
-		if n != 32 {
-			return nil, errors.New("couldn't read left hash")
-		}
-		b, err = r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		if b != lengthByte {
-			return nil, errors.New("expected length byte (0x20")
-		}
-	}
-
-	if len(iop.Suffix) > 0 {
-		right = make([]byte, lengthByte)
-		r = bytes.NewReader(iop.Suffix)
-		b, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		if b != lengthByte {
-			return nil, errors.New("expected length byte (0x20")
-		}
-
-		n, err := r.Read(right)
-		if err != nil {
-			return nil, err
-		}
-		if n != 32 {
-			return nil, errors.New("couldn't read right hash")
-		}
-	}
-
-	if left == nil {
-		left = prevHash
-	} else if right == nil {
-		right = prevHash
-	}
-
-	node := &Node{
-		leftHash:  left,
-		rightHash: right,
-		version:   version,
-		size:      size,
-		height:    int8(height),
-	}
-
-	_, err = node._hash()
-	if err != nil {
-		return nil, err
-	}
-
-	return node, nil
+func (dst *WitnessTree) convertCurrentStateProofs(proofs []*ics23.ExistenceProof) []*ics23.ExistenceProof {
+	return nil
 }
