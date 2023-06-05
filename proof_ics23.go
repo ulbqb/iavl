@@ -1,6 +1,7 @@
 package iavl
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 
@@ -214,4 +215,54 @@ func (tree *MutableTree) GetVersionedProof(key []byte, version int64) (*ics23.Co
 		return t.GetProof(key)
 	}
 	return nil, ErrVersionDoesNotExist
+}
+
+// GetProof gets the proof for the given key.
+func (t *ImmutableTree) GetProofWithKeyLeafs(key []byte) ([]*ics23.CommitmentProof, error) {
+	if t.root == nil {
+		return nil, fmt.Errorf("cannot generate the proof with nil root")
+	}
+
+	exist, err := t.Has(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if exist {
+		_, err := t.Hash()
+		if err != nil {
+			return nil, err
+		}
+		path, node, keys, err := t.root.PathToLeafWithKeys(t, key)
+		if err != nil {
+			return nil, err
+		}
+
+		exist := &ics23.ExistenceProof{
+			Key:   node.key,
+			Value: node.value,
+			Leaf:  convertLeafOp(node.version),
+			Path:  convertInnerOps(path),
+		}
+		proofs := []*ics23.CommitmentProof{
+			{
+				Proof: &ics23.CommitmentProof_Exist{
+					Exist: exist,
+				},
+			},
+		}
+		for i := range keys {
+			if bytes.Equal(key, keys[i]) {
+				continue
+			}
+			proof, err := t.GetMembershipProof(keys[i])
+			if err != nil {
+				return nil, err
+			}
+			proofs = append(proofs, proof)
+		}
+		return proofs, nil
+	} else {
+		panic("implement me")
+	}
 }
