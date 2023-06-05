@@ -235,3 +235,85 @@ func (node *Node) pathToLeaf(t *ImmutableTree, key []byte, path *PathToLeaf) (*N
 	n, err := rightNode.pathToLeaf(t, key, path)
 	return n, err
 }
+
+type KeysMap map[string]struct{}
+
+func (m KeysMap) Set(key string) {
+	m[key] = struct{}{}
+}
+
+func (m KeysMap) List() [][]byte {
+	l := [][]byte{}
+	for k := range m {
+		l = append(l, []byte(k))
+	}
+	return l
+}
+
+func (node *Node) PathToLeafWithKeys(t *ImmutableTree, key []byte) (PathToLeaf, *Node, [][]byte, error) {
+	path := new(PathToLeaf)
+	keysMap := KeysMap{}
+	val, err := node.pathToLeafWithKeys(t, key, path, keysMap)
+	return *path, val, keysMap.List(), err
+}
+
+func (node *Node) pathToLeafWithKeys(t *ImmutableTree, key []byte, path *PathToLeaf, keysMap KeysMap) (*Node, error) {
+	keysMap.Set(string(node.key))
+
+	if node.height == 0 {
+		if bytes.Equal(node.key, key) {
+			return node, nil
+		}
+		return node, errors.New("key does not exist")
+	}
+
+	// Note that we do not store the left child in the ProofInnerNode when we're going to add the
+	// left node as part of the path, similarly we don't store the right child info when going down
+	// the right child node. This is done as an optimization since the child info is going to be
+	// already stored in the next ProofInnerNode in PathToLeaf.
+	if bytes.Compare(key, node.key) < 0 {
+		// left side
+		rightNode, err := node.getRightNode(t)
+		if err != nil {
+			return nil, err
+		}
+
+		pin := ProofInnerNode{
+			Height:  node.height,
+			Size:    node.size,
+			Version: node.version,
+			Left:    nil,
+			Right:   rightNode.hash,
+		}
+		*path = append(*path, pin)
+
+		leftNode, err := node.getLeftNode(t)
+		if err != nil {
+			return nil, err
+		}
+		n, err := leftNode.pathToLeafWithKeys(t, key, path, keysMap)
+		return n, err
+	}
+	// right side
+	leftNode, err := node.getLeftNode(t)
+	if err != nil {
+		return nil, err
+	}
+
+	pin := ProofInnerNode{
+		Height:  node.height,
+		Size:    node.size,
+		Version: node.version,
+		Left:    leftNode.hash,
+		Right:   nil,
+	}
+	*path = append(*path, pin)
+
+	rightNode, err := node.getRightNode(t)
+	if err != nil {
+		return nil, err
+	}
+
+	n, err := rightNode.pathToLeafWithKeys(t, key, path, keysMap)
+	return n, err
+}

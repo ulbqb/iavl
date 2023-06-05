@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"testing"
 
+	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/iavl/internal/encoding"
 	"github.com/cosmos/iavl/mock"
 	"github.com/golang/mock/gomock"
@@ -1441,4 +1442,186 @@ func TestNoFastStorageUpgrade_Integration_SaveVersion_Load_Iterate_Success(t *te
 			return false
 		})
 	})
+}
+
+func TestMyCase(t *testing.T) {
+	eTree := setupMutableTree(t)
+	for i := range make([]int, 100) {
+		key := fmt.Sprintf("key%d", i)
+		value := fmt.Sprintf("value%d", i)
+		ok, err := eTree.Set([]byte(key), []byte(value))
+		require.NoError(t, err)
+		require.False(t, ok, "new key set: nothing to update")
+	}
+	eHash, err := eTree.WorkingHash()
+	require.NoError(t, err)
+
+	cProofs, err := eTree.GetProofWithKeyLeafs([]byte("key30"))
+	require.NoError(t, err)
+
+	tree := setupMutableTree(t)
+	_, err = tree.getPath(cProofs, eHash)
+}
+
+// func TestMyCase3(t *testing.T) {
+// 	eTree := setupMutableTree(t)
+// 	for i := range make([]int, 100) {
+// 		key := fmt.Sprintf("key%d", i)
+// 		value := fmt.Sprintf("value%d", i)
+// 		ok, err := eTree.Set([]byte(key), []byte(value))
+// 		require.NoError(t, err)
+// 		require.False(t, ok, "new key set: nothing to update")
+// 	}
+// 	eRootHash, err := eTree.WorkingHash()
+// 	require.NoError(t, err)
+
+// 	cproof, err := eTree.GetNonMembershipProof([]byte("dummy"))
+// 	require.NoError(t, err)
+
+// 	eTree.Set([]byte("dummy"), []byte("test"))
+// 	eSetedRootHash, err := eTree.WorkingHash()
+// 	require.NoError(t, err)
+
+// 	tree := setupMutableTree(t)
+// 	root, err := tree.getRootNode(cproof, eRootHash)
+// 	require.NoError(t, err)
+// 	tree.root = root
+// 	rootHash, err := tree.WorkingHash()
+// 	require.NoError(t, err)
+// 	require.Equal(t, eRootHash, rootHash)
+// 	updated, err := tree.Set([]byte("dummy"), []byte("test"))
+// 	require.NoError(t, err)
+// 	require.True(t, updated)
+// 	setedRootHash, err := tree.WorkingHash()
+// 	require.NoError(t, err)
+// 	require.Equal(t, eSetedRootHash, setedRootHash)
+// }
+
+// func TestMyCase2(t *testing.T) {
+// 	eTree := setupMutableTree(t)
+// 	for i := range make([]int, 100) {
+// 		key := fmt.Sprintf("key%d", i)
+// 		value := fmt.Sprintf("value%d", i)
+// 		ok, err := eTree.Set([]byte(key), []byte(value))
+// 		require.NoError(t, err)
+// 		require.False(t, ok, "new key set: nothing to update")
+// 	}
+// 	eRootHash, err := eTree.WorkingHash()
+// 	require.NoError(t, err)
+
+// 	cproof, err := eTree.GetMembershipProof([]byte("key10"))
+// 	require.NoError(t, err)
+
+// 	eTree.Set([]byte("key10"), []byte("test"))
+// 	eSetedRootHash, err := eTree.WorkingHash()
+// 	require.NoError(t, err)
+
+// 	tree := setupMutableTree(t)
+// 	root, err := tree.getRootNode(cproof, eRootHash)
+// 	require.NoError(t, err)
+// 	tree.root = root
+// 	rootHash, err := tree.WorkingHash()
+// 	require.NoError(t, err)
+// 	require.Equal(t, eRootHash, rootHash)
+// 	updated, err := tree.Set([]byte("key10"), []byte("test"))
+// 	require.NoError(t, err)
+// 	require.True(t, updated)
+// 	setedRootHash, err := tree.WorkingHash()
+// 	require.NoError(t, err)
+// 	require.Equal(t, eSetedRootHash, setedRootHash)
+// }
+
+// path is proot with key
+func (m *MutableTree) getPath(ps []*ics23.CommitmentProof, rootHash []byte) (*Node, error) {
+	eps := make([]*ics23.ExistenceProof, 0)
+	for i := range ps {
+		p := ps[i]
+		switch p.GetProof().(type) {
+		case *ics23.CommitmentProof_Exist:
+			eps = append(eps, p.GetExist())
+		case *ics23.CommitmentProof_Nonexist:
+			nep := p.GetNonexist()
+			if nep.Left != nil {
+				eps = append(eps, nep.Left)
+			}
+			if nep.Right != nil {
+				eps = append(eps, nep.Right)
+			}
+		}
+	}
+
+	ns := NodeSet{}
+	pns := []*Node{}
+	for i := range eps {
+		ep := eps[i]
+		path := ep.GetPath()
+
+		leaf, err := fromLeafOp(ep.GetLeaf(), ep.Key, ep.Value)
+		if err != nil {
+			return nil, err
+		}
+		ns.Set(leaf)
+		if i == 0 {
+			pns = append(pns, leaf)
+		}
+		prevHash := leaf.hash
+
+		for j := range path {
+			inner, err := fromInnerOp(path[j], prevHash)
+			if err != nil {
+				return nil, err
+			}
+			ns.Set(inner)
+			if i == 0 {
+				pns = append(pns, inner)
+			}
+
+			prevHash = inner.hash
+		}
+	}
+
+	for i := range ns {
+		n := ns[i]
+		if len(n.leftHash) > 0 && n.leftNode == nil {
+			n.leftNode = ns[fmt.Sprintf("%x", n.leftHash)]
+		}
+		if len(n.rightHash) > 0 && n.rightNode == nil {
+			n.rightNode = ns[fmt.Sprintf("%x", n.rightHash)]
+		}
+	}
+
+	root := &Node{}
+	for i := range pns {
+		n := pns[i]
+		n.key = n.getHighestKey2()
+
+		if bytes.Equal(rootHash, n.hash) {
+			root = n
+		}
+
+		has, err := m.ndb.Has(n.hash)
+		if err != nil {
+			return nil, err
+		}
+		if !has {
+			err = m.ndb.SaveNode(n)
+			if err != nil {
+				return nil, err
+			}
+		}
+		fmt.Printf("key: %x\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
+	}
+
+	m.ndb.Commit()
+
+	return root, nil
+}
+
+type NodeSet map[string]*Node
+
+func (s NodeSet) Set(n *Node) {
+	key := fmt.Sprintf("%x", n.hash)
+	if s[key] == nil {
+		s[key] = n
+	}
 }

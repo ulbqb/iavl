@@ -164,9 +164,7 @@ func (tree *MutableTree) reapExistenceProofs(keysAccessed []string) ([]*ics23.Ex
 // Wrapper around setOp to add operation related data to the tree's witness data
 // when tracing is enabled
 func (tree *MutableTree) Set(key, value []byte) (updated bool, err error) {
-	fmt.Println("---------")
 	if !tree.tracingEnabled {
-		fmt.Println("*")
 		return tree.setOp(key, value)
 	}
 	savedTree := tree.ImmutableTree.clone()
@@ -180,7 +178,6 @@ func (tree *MutableTree) Set(key, value []byte) (updated bool, err error) {
 	tree.orphans = map[string]int64{}
 
 	keysAccessed := tree.ndb.keysAccessed.Values()
-	println(len(keysAccessed))
 	existenceProofs, err := tree.reapExistenceProofs(keysAccessed)
 	if err != nil {
 		return false, err
@@ -210,10 +207,7 @@ func (tree *MutableTree) setOp(key, value []byte) (updated bool, err error) {
 		return updated, err
 	}
 	if !updated {
-		fmt.Println("update is false")
 		tree.ndb.keysAccessed.Delete(string(key))
-	} else {
-		fmt.Println("update is true")
 	}
 	return updated, nil
 }
