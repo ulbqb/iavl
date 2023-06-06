@@ -1448,13 +1448,12 @@ func TestNoFastStorageUpgrade_Integration_SaveVersion_Load_Iterate_Success(t *te
 
 func setupExpectedTree(t *testing.T) *MutableTree {
 	eTree := setupMutableTree(t)
-	for i := range make([]int, 100) {
+	for range make([]int, 100) {
 		key := make([]byte, 4)
 		rand.Read(key)
 		value := make([]byte, 4)
 		rand.Read(value)
 		key = []byte(fmt.Sprintf("key%x", key))
-		key = []byte(fmt.Sprintf("key%v", i))
 		value = []byte(fmt.Sprintf("value%x", value))
 		ok, err := eTree.Set(key, value)
 		require.NoError(t, err)
