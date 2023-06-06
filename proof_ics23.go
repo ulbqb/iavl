@@ -218,7 +218,7 @@ func (tree *MutableTree) GetVersionedProof(key []byte, version int64) (*ics23.Co
 }
 
 // GetProof gets the proof for the given key.
-func (t *ImmutableTree) GetProofWithKeyLeafs(key []byte) ([]*ics23.CommitmentProof, error) {
+func (t *ImmutableTree) GetProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
 	if t.root == nil {
 		return nil, fmt.Errorf("cannot generate the proof with nil root")
 	}
