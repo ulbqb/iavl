@@ -1505,6 +1505,95 @@ func TestProofWithKey(t *testing.T) {
 	}
 }
 
+// lemma 1: If certain PathWithKey is known, it is possible to get both child nodes of all nodes on the path.
+func TestLemma1(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+
+	eTree := setupExpectedTree(t)
+	eHash, err := eTree.WorkingHash()
+	require.NoError(t, err)
+	_, _, err = eTree.SaveVersion()
+	require.NoError(t, err)
+	eLeafs, err := eTree.ndb.leafNodes()
+	require.NoError(t, err)
+
+	for i := range eLeafs {
+		el := eLeafs[i]
+		cProofs, err := eTree.GetProofWithKey(el.key)
+		require.NoError(t, err)
+
+		tree := setupMutableTree(t)
+		root, err := tree.getPathWithKey(cProofs, eHash)
+		require.NoError(t, err)
+
+		test := root
+		bufKey := []byte(nil)
+		for {
+			if test.isLeaf() {
+				break
+			}
+			require.True(t, (root.leftNode != nil) || (root.rightNode != nil))
+			require.False(t, (root.leftNode != nil) && (root.rightNode != nil))
+			cp := &ics23.CommitmentProof{}
+			if test.leftNode != nil {
+				cp, err = eTree.GetProof(test.key)
+				require.NoError(t, err)
+			} else if test.rightNode != nil {
+				cp, err = eTree.GetProof(bufKey)
+				require.NoError(t, err)
+				bufKey = test.key
+			}
+
+			ep := cp.GetExist()
+			if ep == nil {
+				nep := cp.GetNonexist()
+				if nep.Left != nil {
+					ep = nep.Left
+				} else if nep.Right != nil {
+					ep = nep.Right
+				}
+			}
+			hs := map[string]struct{}{}
+			leaf, err := fromLeafOp(ep.GetLeaf(), ep.Key, ep.Value)
+			hs[string(leaf.hash)] = struct{}{}
+			require.NoError(t, err)
+			path := ep.GetPath()
+			prevHash := leaf.hash
+			for i := range path {
+				inner, err := fromInnerOp(path[i], prevHash)
+				require.NoError(t, err)
+				hs[string(inner.hash)] = struct{}{}
+				prevHash = inner.hash
+			}
+
+			// main test
+			if test.leftNode != nil {
+				_, ok := hs[string(test.rightHash)]
+				require.True(t, ok)
+			} else if test.rightNode != nil {
+				_, ok := hs[string(test.leftHash)]
+				require.True(t, ok)
+			}
+
+			if test.leftNode != nil {
+				test = test.leftNode
+			} else if test.rightNode != nil {
+				test = test.rightNode
+			}
+		}
+	}
+}
+
+// lemma 2: If two nodes that have key rotate, all paths that have root to leaf also path that have root to leaf after rotation.
+func TestLemma2(t *testing.T) {
+
+}
+
+// lemma 3:
+func TestLemma3(t *testing.T) {
+
+}
+
 // func TestMyCase3(t *testing.T) {
 // 	eTree := setupMutableTree(t)
 // 	for i := range make([]int, 100) {
@@ -1573,7 +1662,7 @@ func TestProofWithKey(t *testing.T) {
 // 	require.Equal(t, eSetedRootHash, setedRootHash)
 // }
 
-// path is proot with key
+// PathWithKey is the path from root node to leaf node whose all node have key.
 func (m *MutableTree) getPathWithKey(ps []*ics23.CommitmentProof, rootHash []byte) (*Node, error) {
 	eps := make([]*ics23.ExistenceProof, 0)
 	for i := range ps {
