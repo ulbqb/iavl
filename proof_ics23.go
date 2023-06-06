@@ -5,8 +5,6 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/cosmos/cosmos-sdk/store/types"
-
 	ics23 "github.com/confio/ics23/go"
 )
 
@@ -220,7 +218,7 @@ func (tree *MutableTree) GetVersionedProof(key []byte, version int64) (*ics23.Co
 }
 
 // GetProof gets the proof for the given key.
-func (t *ImmutableTree) GetProofWithKey(key []byte) ([]types.CommitmentOp, error) {
+func (t *ImmutableTree) GetProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
 	if t.root == nil {
 		return nil, fmt.Errorf("cannot generate the proof with nil root")
 	}
@@ -238,36 +236,36 @@ func (t *ImmutableTree) GetProofWithKey(key []byte) ([]types.CommitmentOp, error
 }
 
 // GetProof gets the proof for the given key.
-func (t *ImmutableTree) GetMembershipProofWithKey(key []byte) ([]types.CommitmentOp, error) {
-	proofs := []types.CommitmentOp{}
+func (t *ImmutableTree) GetMembershipProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
+	proofs := []*ics23.CommitmentProof{}
 
 	exist, keys, err := t.createExistenceProofWithKey(key)
 	if err != nil {
 		return nil, err
 	}
 
-	proofs = append(proofs, types.NewIavlCommitmentOp(key, &ics23.CommitmentProof{
+	proofs = append(proofs, &ics23.CommitmentProof{
 		Proof: &ics23.CommitmentProof_Exist{
 			Exist: exist,
 		},
-	}))
+	})
 
 	for i := range keys {
 		if bytes.Equal(key, keys[i]) {
 			continue
 		}
-		proof, err := t.GetMembershipProof(keys[i])
+		p, err := t.GetMembershipProof(keys[i])
 		if err != nil {
 			return nil, err
 		}
-		proofs = append(proofs, types.NewIavlCommitmentOp(keys[i], proof))
+		proofs = append(proofs, p)
 	}
 
 	return proofs, nil
 }
 
-func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]types.CommitmentOp, error) {
-	proofs := []types.CommitmentOp{}
+func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]*ics23.CommitmentProof, error) {
+	proofs := []*ics23.CommitmentProof{}
 
 	// idx is one node right of what we want....
 	var err error
@@ -313,21 +311,21 @@ func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]types.Commit
 		dupkey = rightkey
 	}
 
-	proofs = append(proofs, types.NewIavlCommitmentOp(key, &ics23.CommitmentProof{
+	proofs = append(proofs, &ics23.CommitmentProof{
 		Proof: &ics23.CommitmentProof_Nonexist{
 			Nonexist: nonexist,
 		},
-	}))
+	})
 
 	for i := range keys {
 		if bytes.Equal(dupkey, keys[i]) {
 			continue
 		}
-		proof, err := t.GetMembershipProof(keys[i])
+		p, err := t.GetMembershipProof(keys[i])
 		if err != nil {
 			return nil, err
 		}
-		proofs = append(proofs, types.NewIavlCommitmentOp(keys[i], proof))
+		proofs = append(proofs, p)
 	}
 
 	return proofs, nil
