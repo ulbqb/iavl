@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/rand"
 	"runtime"
 	"sort"
 	"strconv"
 	"testing"
+	"time"
 
 	ics23 "github.com/confio/ics23/go"
 	"github.com/cosmos/iavl/internal/encoding"
@@ -1444,23 +1446,64 @@ func TestNoFastStorageUpgrade_Integration_SaveVersion_Load_Iterate_Success(t *te
 	})
 }
 
-func TestMyCase(t *testing.T) {
+func setupExpectedTree(t *testing.T) *MutableTree {
 	eTree := setupMutableTree(t)
 	for i := range make([]int, 100) {
-		key := fmt.Sprintf("key%d", i)
-		value := fmt.Sprintf("value%d", i)
-		ok, err := eTree.Set([]byte(key), []byte(value))
+		key := make([]byte, 4)
+		rand.Read(key)
+		value := make([]byte, 4)
+		rand.Read(value)
+		key = []byte(fmt.Sprintf("key%x", key))
+		key = []byte(fmt.Sprintf("key%v", i))
+		value = []byte(fmt.Sprintf("value%x", value))
+		ok, err := eTree.Set(key, value)
 		require.NoError(t, err)
-		require.False(t, ok, "new key set: nothing to update")
+		require.False(t, ok)
 	}
+	return eTree
+}
+
+func TestProofWithKey(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+
+	eTree := setupExpectedTree(t)
 	eHash, err := eTree.WorkingHash()
 	require.NoError(t, err)
-
-	cProofs, err := eTree.GetProofWithKeyLeafs([]byte("key30"))
+	_, _, err = eTree.SaveVersion()
+	require.NoError(t, err)
+	eLeafs, err := eTree.ndb.leafNodes()
 	require.NoError(t, err)
 
-	tree := setupMutableTree(t)
-	_, err = tree.getPath(cProofs, eHash)
+	for i := range eLeafs {
+		el := eLeafs[i]
+		cProofs, err := eTree.GetProofWithKey(el.key)
+		require.NoError(t, err)
+
+		tree := setupMutableTree(t)
+		root, err := tree.getPathWithKey(cProofs, eHash)
+		require.NoError(t, err)
+
+		expected := eTree.root
+		test := root
+		for {
+			require.Equalf(t, expected.key, test.key, "expected: %x, test: %x", expected.hash, test.hash) // main test
+			if expected.isLeaf() {
+				require.True(t, test.isLeaf())
+				break
+			}
+			require.True(t, (root.leftNode != nil) || (root.rightNode != nil))
+			require.False(t, (root.leftNode != nil) && (root.rightNode != nil))
+			if test.leftNode != nil {
+				expected, err = expected.getLeftNode(eTree.ImmutableTree)
+				require.NoError(t, err)
+				test = test.leftNode
+			} else if test.rightNode != nil {
+				expected, err = expected.getRightNode(eTree.ImmutableTree)
+				require.NoError(t, err)
+				test = test.rightNode
+			}
+		}
+	}
 }
 
 // func TestMyCase3(t *testing.T) {
@@ -1532,7 +1575,7 @@ func TestMyCase(t *testing.T) {
 // }
 
 // path is proot with key
-func (m *MutableTree) getPath(ps []*ics23.CommitmentProof, rootHash []byte) (*Node, error) {
+func (m *MutableTree) getPathWithKey(ps []*ics23.CommitmentProof, rootHash []byte) (*Node, error) {
 	eps := make([]*ics23.ExistenceProof, 0)
 	for i := range ps {
 		p := ps[i]
@@ -1609,7 +1652,21 @@ func (m *MutableTree) getPath(ps []*ics23.CommitmentProof, rootHash []byte) (*No
 				return nil, err
 			}
 		}
-		fmt.Printf("key: %x\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
+	}
+
+	bufHash := []byte{}
+	for i := range pns {
+		n := pns[i]
+		if !n.isLeaf() {
+			if bytes.Equal(n.leftHash, bufHash) {
+				n.rightNode = nil
+			} else if bytes.Equal(n.rightHash, bufHash) {
+				n.leftNode = nil
+			} else {
+				return nil, fmt.Errorf("something wrong")
+			}
+		}
+		bufHash = n.hash
 	}
 
 	m.ndb.Commit()
@@ -1624,4 +1681,34 @@ func (s NodeSet) Set(n *Node) {
 	if s[key] == nil {
 		s[key] = n
 	}
+}
+
+func printNode2(n *Node) {
+	fmt.Printf("key: %s\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
+}
+
+func printTree(tree *MutableTree) {
+	strTree := make([][]string, tree.root.height+1)
+	leftDepthpriority(tree, tree.root, strTree, 0)
+	for _, t := range strTree {
+		fmt.Println(t)
+	}
+}
+
+func leftDepthpriority(tree *MutableTree, n *Node, t [][]string, h int8) {
+	t[h] = append(t[h], string(n.key))
+	if n.isLeaf() {
+		return
+	}
+	leftNode, err := n.getLeftNode(tree.ImmutableTree)
+	if err != nil {
+		panic(err)
+	}
+	rightNode, err := n.getRightNode(tree.ImmutableTree)
+	if err != nil {
+		panic(err)
+	}
+	h = h + 1
+	leftDepthpriority(tree, leftNode, t, h)
+	leftDepthpriority(tree, rightNode, t, h)
 }

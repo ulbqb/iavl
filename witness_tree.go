@@ -556,16 +556,6 @@ func (node *Node) getHighestKey2() []byte {
 	if node.isLeaf() {
 		return node.key
 	}
-	// highestKey := []byte{}
-	// if node.rightNode != nil {
-	// 	highestKey = node.rightNode.getHighestKey2()
-	// }
-	// if node.leftNode != nil {
-	// 	leftHighestKey := node.leftNode.getHighestKey2()
-	// 	if len(highestKey) == 0 {
-	// 		highestKey = append(leftHighestKey, byte(0))
-	// 	}
-	// }
 	buf := node.rightNode
 	for {
 		if buf.leftNode == nil {
