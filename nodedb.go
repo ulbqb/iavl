@@ -153,7 +153,6 @@ func (ndb *nodeDB) unsafeGetNode(hash []byte) (*Node, error) {
 		return nil, fmt.Errorf("can't get node %X: %v", hash, err)
 	}
 	if buf == nil {
-		panic(fmt.Errorf("Value missing for hash %x corresponding to nodeKey %x", hash, ndb.nodeKey(hash)))
 		return nil, fmt.Errorf("Value missing for hash %x corresponding to nodeKey %x", hash, ndb.nodeKey(hash))
 	}
 

@@ -42,7 +42,6 @@ func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, versi
 	}
 	proofs := oracle.GetProof(fmt.Sprintf("%s/key", storeName), "roothash")
 	rootHash := proofs[len(proofs)-1].Value
-	fmt.Printf("#4 getting %s store root hash: %v\n", storeName, rootHash)
 	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash, witnessData: nil, operationCounter: 0, oracle: oracle, storeName: storeName}
 }
 
