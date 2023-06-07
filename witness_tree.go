@@ -2,11 +2,8 @@ package iavl
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
-	"strings"
 
-	ics23 "github.com/confio/ics23/go"
 	dbm "github.com/tendermint/tm-db"
 )
 
@@ -14,19 +11,13 @@ import (
 // a subset of nodes of an IAVL tree
 type WitnessTree struct {
 	*MutableTree
-	initialRootHash  []byte        // Initial Root Hash when Deep Subtree is initialized for an already existing tree
-	witnessData      []WitnessData // Represents a trace operation along with inclusion proofs required for said operation
-	operationCounter int           // Keeps track of which operation in the witness data list the Deep Subtree is on
+	initialRootHash []byte // Initial Root Hash when Deep Subtree is initialized for an already existing tree
 	// new
-	oracle    OracleClient
+	oracle    *OracleClient
 	storeName string
 }
 
-type OracleClient interface {
-	GetProof(string, string) []*ics23.ExistenceProof
-}
-
-func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracle OracleClient, storeName string) *WitnessTree {
+func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracleClient OracleClientI, storeName string) *WitnessTree {
 	ndb := newNodeDB(db, cacheSize, nil)
 	head := &ImmutableTree{ndb: ndb, version: version, skipFastStorageUpgrade: skipFastStorageUpgrade}
 	mutableTree := &MutableTree{
@@ -40,15 +31,9 @@ func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, versi
 		ndb:                      ndb,
 		skipFastStorageUpgrade:   skipFastStorageUpgrade,
 	}
-	proofs := oracle.GetProof(fmt.Sprintf("%s/key", storeName), "roothash")
-	rootHash := proofs[len(proofs)-1].Value
-	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash, witnessData: nil, operationCounter: 0, oracle: oracle, storeName: storeName}
-}
-
-// Setter for witness data. Also, resets the operation counter back to 0.
-func (dst *WitnessTree) SetWitnessData(witnessData []WitnessData) {
-	dst.witnessData = witnessData
-	dst.operationCounter = 0
+	xOracleClient := NewOracleClient(oracleClient)
+	rootHash := xOracleClient.GetRootHash(storeName)
+	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash, oracle: xOracleClient, storeName: storeName}
 }
 
 // Returns the initial root hash if it is initialized and Deep Subtree root is nil.
@@ -60,144 +45,19 @@ func (dst *WitnessTree) GetInitialRootHash() ([]byte, error) {
 	return dst.WorkingHash()
 }
 
-// Setter for initial root hash
-func (dst *WitnessTree) SetInitialRootHash(initialRootHash []byte) {
-	dst.initialRootHash = initialRootHash
-}
-
-// Traverses the nodes in the NodeDB that are part of Deep Subtree
-// and links them together using the populated left and right
-// hashes and sets the root to be the node with the given rootHash
-func (dst *WitnessTree) buildTree(rootHash []byte) error {
-	workingHash, err := dst.WorkingHash()
-	if err != nil {
-		return err
-	}
-	if !bytes.Equal(workingHash, rootHash) {
-		if dst.root != nil {
-			return fmt.Errorf(
-				"deep subtree rootHash: %s does not match expected rootHash: %s",
-				workingHash,
-				rootHash,
-			)
-		}
-		rootNode, rootErr := dst.ndb.GetNode(rootHash)
-		if rootErr != nil {
-			return fmt.Errorf("could not set root of deep subtree: %w", rootErr)
-		}
-		dst.root = rootNode
-
-	}
-
-	nodes, traverseErr := dst.ndb.nodes()
-	if traverseErr != nil {
-		return fmt.Errorf("could not traverse nodedb: %w", traverseErr)
-	}
-	// Traverse through nodes and link them correctly
-	for _, node := range nodes {
-		pnode, err := dst.ndb.GetNode(node.hash)
-		if err != nil {
-			return err
-		}
-		err = dst.linkNode(pnode)
-		if err != nil {
-			return err
-		}
-	}
-	// Now that nodes are linked correctly, traverse again
-	// and set their keys correctly
-	for _, node := range nodes {
-		pnode, _ := dst.ndb.GetNode(node.hash)
-		pnode.updateInnerNodeKey()
-	}
-
-	return nil
-}
-
-// Link the given node if it is not linked yet
-// If already linked, return an error in case connection was made incorrectly
-// Note: GetNode returns nil if the node with the hash passed into it does not exist
-// which is expected with a deep subtree.
-func (dst *WitnessTree) linkNode(node *Node) error {
-	if len(node.leftHash) > 0 {
-		if node.leftNode == nil {
-			node.leftNode, _ = dst.ndb.GetNode(node.leftHash)
-		}
-	}
-	if len(node.rightHash) > 0 {
-		if node.rightNode == nil {
-			node.rightNode, _ = dst.ndb.GetNode(node.rightHash)
-		}
-	}
-	return nil
-}
-
-// Verifies the given operation matches up with the witness data.
-// Also, verifies and adds existence proofs related to the operation.
-func (dst *WitnessTree) verifyOperationAndProofs(operation Operation, key []byte, value []byte) error {
-	if dst.witnessData == nil {
-		return errors.New("witness data in deep subtree is nil")
-	}
-	if dst.operationCounter >= len(dst.witnessData) {
-		return fmt.Errorf(
-			"operation counter in witness data: %d should be less than length of witness data: %d",
-			dst.operationCounter,
-			len(dst.witnessData),
-		)
-	}
-	traceOp := dst.witnessData[dst.operationCounter]
-	if traceOp.Operation != operation || !bytes.Equal(traceOp.Key, key) || !bytes.Equal(traceOp.Value, value) {
-		return fmt.Errorf(
-			"traceOp in witnessData (%s, %s, %s) does not match up with executed operation (%s, %s, %s)",
-			traceOp.Operation, string(traceOp.Key), string(traceOp.Value),
-			operation, string(key), string(value),
-		)
-	}
-	rootHash, err := dst.GetInitialRootHash()
-	if err != nil {
-		return err
-	}
-
-	// Verify proofs against current rootHash
-	for _, proof := range traceOp.Proofs {
-		fmt.Printf("key: %v value: %v key: %v value: %v\n", key, value, proof.Key, proof.Value)
-		err := proof.Verify(ics23.IavlSpec, rootHash, proof.Key, proof.Value)
-		if err != nil {
-			return err
-		}
-	}
-	err = dst.AddExistenceProofs(traceOp.Proofs, rootHash)
-	if err != nil {
-		return err
-	}
-	dst.operationCounter++
-	return nil
-}
-
 func (dst *WitnessTree) addProofs(key []byte, value []byte) error {
-	proofs := dst.oracle.GetProof(fmt.Sprintf("%s/key", dst.storeName), string(key))
-	proofs = proofs[:len(proofs)-1]
-	rootHash, err := dst.GetInitialRootHash()
-	if err != nil {
-		return err
-	}
-	// Verify proofs against current rootHash
-	for _, proof := range proofs {
-		fmt.Printf("value: %v %v\n", value, proof.Value)
-		err := proof.Verify(ics23.IavlSpec, rootHash, proof.Key, proof.Value)
-		if err != nil {
-			fmt.Printf("errlog: %v\n", err)
-			// panic("panic!!")
-			return err
-		}
+	nodes, accessed := dst.oracle.GetPathWithKey(dst.storeName, key)
+
+	if accessed {
+		return nil
 	}
 
-	proofs = dst.convertCurrentStateProofs(proofs)
-	err = dst.AddExistenceProofs(proofs, rootHash)
+	err := dst.addProofNodes(nodes)
 	if err != nil {
-		// panic("addProof dekite naiyo!!!!!")
+		fmt.Println(err)
 		return err
 	}
+
 	return nil
 }
 
@@ -223,6 +83,7 @@ func (dst *WitnessTree) set(key []byte, value []byte) (updated bool, err error) 
 
 	dst.root, updated, err = dst.recursiveSet(dst.root, key, value)
 	if err != nil {
+		fmt.Println(err)
 		return updated, err
 	}
 	return updated, recomputeHash(dst.root)
@@ -454,104 +315,96 @@ func (dst *WitnessTree) recursiveRemove(node *Node, key []byte) (newHash []byte,
 	return nil, nil, nil, fmt.Errorf("node with key: %s not found", key)
 }
 
-// nolint: unused
-// Prints a Deep Subtree recursively.
-// Modified version of printNode from util.go
-func (dst *WitnessTree) printNodeWitnessTree(node *Node, indent int) error {
-	indentPrefix := strings.Repeat("    ", indent)
+func (dst *WitnessTree) addProofNodes(nodes []*Node) error {
+	for i := range nodes {
+		n := nodes[i]
+		has, err := dst.ndb.Has(n.hash)
+		if err != nil {
+			return err
+		}
+		if !has {
+			err = dst.ndb.SaveNode(n)
+			if err != nil {
+				return err
+			}
+		}
+	}
 
+	err := dst.ndb.Commit()
+	if err != nil {
+		return err
+	}
+
+	if dst.root == nil {
+		rootHash, err := dst.GetInitialRootHash()
+		if err != nil {
+			return err
+		}
+		root, err := dst.ndb.GetNode(rootHash)
+		if err != nil {
+			return err
+		}
+		dst.root = root
+	}
+
+	dst.recursiveNodeLink(dst.root)
+
+	return nil
+}
+
+func (dst *WitnessTree) recursiveNodeLink(node *Node) error {
 	if node == nil {
-		fmt.Printf("%s<nil>\n", indentPrefix)
 		return nil
 	}
-	if node.rightNode != nil {
-		err := dst.printNodeWitnessTree(node.rightNode, indent+1)
-		if err != nil {
-			return err
-		}
+
+	if len(node.key) == 0 {
+		fmt.Println("development only validation")
+		fmt.Printf("key: %s\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", node.key, node.value, node.hash, node.leftHash, node.rightHash, node.height, node.leftNode != nil, node.rightNode != nil)
+		panic("something wrong")
 	}
 
-	hash, err := node._hash()
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("%sh:%X\n", indentPrefix, hash)
 	if node.isLeaf() {
-		fmt.Printf("%s%X:%X (%v)\n", indentPrefix, node.key, node.value, node.height)
+		return nil
 	}
 
-	if node.leftNode != nil {
-		err := dst.printNodeWitnessTree(node.leftNode, indent+1)
+	if node.leftNode == nil {
+		has, err := dst.ndb.Has(node.leftHash)
 		if err != nil {
 			return err
 		}
+		if has {
+			node.leftNode, err = dst.ndb.GetNode(node.leftHash)
+			if err != nil {
+				return err
+			}
+		}
 	}
-	return nil
-}
 
-// Adds nodes associated to the given existence proof to the underlying deep subtree
-func (dst *WitnessTree) AddExistenceProofs(existenceProofs []*ics23.ExistenceProof, rootHash []byte) error {
-	fmt.Printf("proof num %d\n", len(existenceProofs))
-	for _, existenceProof := range existenceProofs {
-		err := dst.addExistenceProof(existenceProof)
+	if node.rightNode == nil {
+		has, err := dst.ndb.Has(node.rightHash)
 		if err != nil {
 			return err
 		}
-		err = dst.ndb.Commit()
-		if err != nil {
-			return err
+		if has {
+			node.rightNode, err = dst.ndb.GetNode(node.rightHash)
+			if err != nil {
+				return err
+			}
 		}
 	}
-	err := dst.buildTree(rootHash)
+
+	err := dst.recursiveNodeLink(node.leftNode)
+	if err != nil {
+		return err
+	}
+	err = dst.recursiveNodeLink(node.rightNode)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (dst *WitnessTree) saveNodeIfNeeded(node *Node) error {
-	has, err := dst.ndb.Has(node.hash)
-	if err != nil {
-		return err
-	}
-	if !has {
-		err = dst.ndb.SaveNode(node)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (dst *WitnessTree) addExistenceProof(proof *ics23.ExistenceProof) error {
-	leaf, err := fromLeafOp(proof.GetLeaf(), proof.Key, proof.Value)
-	if err != nil {
-		return err
-	}
-	err = dst.saveNodeIfNeeded(leaf)
-	if err != nil {
-		return err
-	}
-	prevHash := leaf.hash
-	path := proof.GetPath()
-	for i := range path {
-		inner, err := fromInnerOp(path[i], prevHash)
-		if err != nil {
-			return err
-		}
-		prevHash = inner.hash
-
-		dst.saveNodeIfNeeded(inner)
-	}
-	return nil
-}
-
-func (dst *WitnessTree) convertCurrentStateProofs(proofs []*ics23.ExistenceProof) []*ics23.ExistenceProof {
-	return nil
-}
-
-func (node *Node) getHighestKey2() []byte {
+func (node *Node) getNodeKey() []byte {
 	if node.isLeaf() {
 		return node.key
 	}

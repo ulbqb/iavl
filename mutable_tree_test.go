@@ -1594,6 +1594,48 @@ func TestLemma3(t *testing.T) {
 
 }
 
+func TestDBPointer(t *testing.T) {
+	rand.Seed(time.Now().UnixNano())
+
+	eTree := setupExpectedTree(t)
+	eHash, err := eTree.WorkingHash()
+	require.NoError(t, err)
+	_, _, err = eTree.SaveVersion()
+	require.NoError(t, err)
+	eLeafs, err := eTree.ndb.leafNodes()
+	require.NoError(t, err)
+
+	el := eLeafs[0]
+	cProofs, err := eTree.GetProofWithKey(el.key)
+	require.NoError(t, err)
+
+	tree := setupMutableTree(t)
+	root, err := tree.getPathWithKey(cProofs, eHash)
+	require.NoError(t, err)
+
+	clone, err := root.clone(root.version)
+	require.NoError(t, err)
+	clone.hash = root.hash
+
+	err = tree.ndb.SaveNode(clone)
+	require.NoError(t, err)
+
+	err = tree.ndb.Commit()
+	require.NoError(t, err)
+
+	savedRoot, err := tree.ndb.GetNode(root.hash)
+	require.NoError(t, err)
+
+	emptyNode, err := tree.ndb.GetNode([]byte{})
+	require.NoError(t, err)
+	fmt.Println(emptyNode == nil)
+
+	printNode2(root)
+	printNode2(clone)
+	printNode2(savedRoot)
+	panic("panic")
+}
+
 // func TestMyCase3(t *testing.T) {
 // 	eTree := setupMutableTree(t)
 // 	for i := range make([]int, 100) {
@@ -1724,7 +1766,7 @@ func (m *MutableTree) getPathWithKey(ps []*ics23.CommitmentProof, rootHash []byt
 	root := &Node{}
 	for i := range pns {
 		n := pns[i]
-		n.key = n.getHighestKey2()
+		n.key = n.getNodeKey()
 
 		if bytes.Equal(rootHash, n.hash) {
 			root = n
@@ -1760,15 +1802,6 @@ func (m *MutableTree) getPathWithKey(ps []*ics23.CommitmentProof, rootHash []byt
 	m.ndb.Commit()
 
 	return root, nil
-}
-
-type NodeSet map[string]*Node
-
-func (s NodeSet) Set(n *Node) {
-	key := fmt.Sprintf("%x", n.hash)
-	if s[key] == nil {
-		s[key] = n
-	}
 }
 
 func printNode2(n *Node) {
