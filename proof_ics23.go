@@ -289,7 +289,6 @@ func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]*ics23.Commi
 		if err != nil {
 			return nil, err
 		}
-
 		nonexist.Left, keys, err = t.createExistenceProofWithKey(leftkey)
 		if err != nil {
 			return nil, err
