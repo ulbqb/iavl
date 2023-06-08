@@ -1,6 +1,7 @@
 package iavl
 
 import (
+	"encoding/hex"
 	"fmt"
 
 	ics23 "github.com/confio/ics23/go"
@@ -33,13 +34,13 @@ func (c *OracleClient) GetProof(path, data string) ([]*ics23.CommitmentProof, bo
 }
 
 func (c *OracleClient) GetRootHash() []byte {
-	proofs, _ := c.GetProof(fmt.Sprintf("%s/key", c.storeName), "roothash")
+	proofs, _ := c.GetProof(fmt.Sprintf("%s/key", c.storeName), hex.EncodeToString([]byte("roothash")))
 	rootHash := proofs[len(proofs)-1].GetExist().Value
 	return rootHash
 }
 
 func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
-	ps, accessed := c.GetProof(fmt.Sprintf("%s/keys", c.storeName), string(key))
+	ps, accessed := c.GetProof(fmt.Sprintf("%s/keys", c.storeName), hex.EncodeToString(key))
 	if accessed {
 		return nil, accessed
 	}
