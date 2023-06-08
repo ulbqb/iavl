@@ -592,17 +592,21 @@ func (node *Node) getLeftNodeFetchableKey(parent *Node) []byte {
 	buf := node
 	leftNodeFetchableKey := []byte{0x00}
 	for {
+		fmt.Println(buf.isLeaf())
+		fmt.Printf("%v %v\n", buf.key, parent.key)
+		if bytes.Equal(buf.hash, parent.hash) {
+			break
+		}
 		if bytes.Compare(buf.key, parent.key) > 0 {
+			fmt.Println("right")
 			buf = buf.leftNode
 		} else {
+			fmt.Println("left")
 			leftNodeFetchableKey = buf.key
 			buf = buf.rightNode
 		}
 		if buf == nil {
 			panic("something wrong")
-		}
-		if bytes.Equal(buf.hash, parent.hash) {
-			break
 		}
 	}
 	return leftNodeFetchableKey
