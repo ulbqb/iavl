@@ -12,13 +12,12 @@ import (
 type WitnessTree struct {
 	*MutableTree
 	initialRootHash []byte // Initial Root Hash when Deep Subtree is initialized for an already existing tree
-	// new
-	oracle    *OracleClient
-	storeName string
 }
 
 func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracleClient OracleClientI, storeName string) *WitnessTree {
 	ndb := newNodeDB(db, cacheSize, nil)
+	xOracleClient := NewOracleClient(oracleClient, storeName)
+	ndb.oracle = xOracleClient
 	head := &ImmutableTree{ndb: ndb, version: version, skipFastStorageUpgrade: skipFastStorageUpgrade}
 	mutableTree := &MutableTree{
 		ImmutableTree:            head,
@@ -31,9 +30,9 @@ func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, versi
 		ndb:                      ndb,
 		skipFastStorageUpgrade:   skipFastStorageUpgrade,
 	}
-	xOracleClient := NewOracleClient(oracleClient)
-	rootHash := xOracleClient.GetRootHash(storeName)
-	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash, oracle: xOracleClient, storeName: storeName}
+	rootHash := xOracleClient.GetRootHash()
+	fmt.Printf("store hash: %x\n", rootHash)
+	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash}
 }
 
 // Returns the initial root hash if it is initialized and Deep Subtree root is nil.
@@ -45,16 +44,33 @@ func (dst *WitnessTree) GetInitialRootHash() ([]byte, error) {
 	return dst.WorkingHash()
 }
 
-func (dst *WitnessTree) addProofs(key []byte, value []byte) error {
-	nodes, accessed := dst.oracle.GetPathWithKey(dst.storeName, key)
+func (dst *WitnessTree) addProofs(key []byte) error {
+	nodes, accessed := dst.ndb.oracle.GetPathWithKey(key)
 
 	if accessed {
 		return nil
 	}
 
-	err := dst.addProofNodes(nodes)
+	err := dst.saveNodes(nodes)
 	if err != nil {
-		fmt.Println(err)
+		return err
+	}
+
+	if dst.root == nil {
+		rootHash, err := dst.GetInitialRootHash()
+		if err != nil {
+			return err
+		}
+		root, err := dst.ndb.GetNode(rootHash)
+		if err != nil {
+			return err
+		}
+		dst.root = root
+	}
+
+	err = dst.recursiveNodeLink(dst.root)
+
+	if err != nil {
 		return err
 	}
 
@@ -63,10 +79,11 @@ func (dst *WitnessTree) addProofs(key []byte, value []byte) error {
 
 // Verifies the Set operation with witness data and perform the given write operation
 func (dst *WitnessTree) Set(key []byte, value []byte) (updated bool, err error) {
-	err = dst.addProofs(key, value)
+	err = dst.addProofs(key)
 	if err != nil {
 		return false, err
 	}
+	PrintTree2(dst.root)
 	return dst.set(key, value)
 }
 
@@ -86,7 +103,9 @@ func (dst *WitnessTree) set(key []byte, value []byte) (updated bool, err error) 
 		fmt.Println(err)
 		return updated, err
 	}
-	return updated, recomputeHash(dst.root)
+	err = recomputeHash(dst.root)
+	fmt.Printf("set #%d %x\n", dst.root.version, dst.root.hash)
+	return updated, err
 }
 
 // Helper method for set to traverse and find the node with given key
@@ -175,7 +194,7 @@ func (dst *WitnessTree) recursiveSet(node *Node, key []byte, value []byte) (
 
 // Verifies the Get operation with witness data and perform the given read operation
 func (dst *WitnessTree) Get(key []byte) (value []byte, err error) {
-	err = dst.addProofs(key, value)
+	err = dst.addProofs(key)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +213,7 @@ func (dst *WitnessTree) get(key []byte) ([]byte, error) {
 
 // Verifies the Remove operation with witness data and perform the given delete operation
 func (dst *WitnessTree) Remove(key []byte) (value []byte, removed bool, err error) {
-	err = dst.addProofs(key, value)
+	err = dst.addProofs(key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -315,7 +334,7 @@ func (dst *WitnessTree) recursiveRemove(node *Node, key []byte) (newHash []byte,
 	return nil, nil, nil, fmt.Errorf("node with key: %s not found", key)
 }
 
-func (dst *WitnessTree) addProofNodes(nodes []*Node) error {
+func (dst *ImmutableTree) saveNodes(nodes []*Node) error {
 	for i := range nodes {
 		n := nodes[i]
 		has, err := dst.ndb.Has(n.hash)
@@ -335,24 +354,10 @@ func (dst *WitnessTree) addProofNodes(nodes []*Node) error {
 		return err
 	}
 
-	if dst.root == nil {
-		rootHash, err := dst.GetInitialRootHash()
-		if err != nil {
-			return err
-		}
-		root, err := dst.ndb.GetNode(rootHash)
-		if err != nil {
-			return err
-		}
-		dst.root = root
-	}
-
-	dst.recursiveNodeLink(dst.root)
-
 	return nil
 }
 
-func (dst *WitnessTree) recursiveNodeLink(node *Node) error {
+func (dst *ImmutableTree) recursiveNodeLink(node *Node) error {
 	if node == nil {
 		return nil
 	}
@@ -390,6 +395,9 @@ func (dst *WitnessTree) recursiveNodeLink(node *Node) error {
 			if err != nil {
 				return err
 			}
+			if node.rightNode != nil {
+				fmt.Printf("aaaaa %x\n", node.rightNode.key)
+			}
 		}
 	}
 
@@ -416,4 +424,30 @@ func (node *Node) getNodeKey() []byte {
 		buf = buf.leftNode
 	}
 	return buf.key
+}
+
+func PrintNode(n *Node) {
+	fmt.Printf("key: %s\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
+}
+
+func PrintTree2(node *Node) {
+	tree := make([][]string, node.height+3)
+	printTree2(node, 0, tree, 0)
+	for _, t := range tree {
+		fmt.Println(t)
+	}
+}
+
+func printTree2(node *Node, index int, tree [][]string, width int) {
+	if node == nil {
+		tree[index] = append(tree[index], fmt.Sprintf("%d: empty", width))
+		return
+	}
+	if node.isLeaf() {
+		tree[index] = append(tree[index], fmt.Sprintf("leaf: %x", node.key))
+		return
+	}
+	tree[index] = append(tree[index], fmt.Sprintf("%d %x", width, node.key))
+	printTree2(node.leftNode, index+1, tree, width)
+	printTree2(node.rightNode, index+1, tree, width+1)
 }

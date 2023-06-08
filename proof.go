@@ -238,8 +238,14 @@ func (node *Node) pathToLeaf(t *ImmutableTree, key []byte, path *PathToLeaf) (*N
 
 type KeysMap map[string]struct{}
 
-func (m KeysMap) Set(key string) {
-	m[key] = struct{}{}
+func (m KeysMap) Set(key []byte) {
+	m[string(key)] = struct{}{}
+}
+
+func (m KeysMap) SetKeys(keys [][]byte) {
+	for i := range keys {
+		m[string(keys[i])] = struct{}{}
+	}
 }
 
 func (m KeysMap) List() [][]byte {
@@ -250,6 +256,11 @@ func (m KeysMap) List() [][]byte {
 	return l
 }
 
+func (m KeysMap) Has(key []byte) bool {
+	_, ok := m[string(key)]
+	return ok
+}
+
 func (node *Node) PathToLeafWithKeys(t *ImmutableTree, key []byte) (PathToLeaf, *Node, [][]byte, error) {
 	path := new(PathToLeaf)
 	keysMap := KeysMap{}
@@ -258,7 +269,7 @@ func (node *Node) PathToLeafWithKeys(t *ImmutableTree, key []byte) (PathToLeaf, 
 }
 
 func (node *Node) pathToLeafWithKeys(t *ImmutableTree, key []byte, path *PathToLeaf, keysMap KeysMap) (*Node, error) {
-	keysMap.Set(string(node.key))
+	keysMap.Set(node.key)
 
 	if node.height == 0 {
 		if bytes.Equal(node.key, key) {

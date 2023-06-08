@@ -13,12 +13,14 @@ type OracleClientI interface {
 type OracleClient struct {
 	oracle      OracleClientI
 	accessedKey AccessedKey
+	storeName   string
 }
 
-func NewOracleClient(oracle OracleClientI) *OracleClient {
+func NewOracleClient(oracle OracleClientI, storeName string) *OracleClient {
 	return &OracleClient{
 		oracle:      oracle,
 		accessedKey: AccessedKey{},
+		storeName:   storeName,
 	}
 }
 
@@ -30,14 +32,14 @@ func (c *OracleClient) GetProof(path, data string) ([]*ics23.CommitmentProof, bo
 	return c.oracle.GetProof(path, data), false
 }
 
-func (c *OracleClient) GetRootHash(storeName string) []byte {
-	proofs, _ := c.GetProof(fmt.Sprintf("%s/key", storeName), "roothash")
+func (c *OracleClient) GetRootHash() []byte {
+	proofs, _ := c.GetProof(fmt.Sprintf("%s/key", c.storeName), "roothash")
 	rootHash := proofs[len(proofs)-1].GetExist().Value
 	return rootHash
 }
 
-func (c *OracleClient) GetPathWithKey(storeName string, key []byte) ([]*Node, bool) {
-	ps, accessed := c.GetProof(fmt.Sprintf("%s/keys", storeName), string(key))
+func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
+	ps, accessed := c.GetProof(fmt.Sprintf("%s/keys", c.storeName), string(key))
 	if accessed {
 		return nil, accessed
 	}
@@ -59,6 +61,7 @@ func (c *OracleClient) GetPathWithKey(storeName string, key []byte) ([]*Node, bo
 
 	for i := range eps {
 		ep := eps[i]
+		fmt.Printf("ep: %x\n", ep.Key)
 
 		leaf, err := fromLeafOp(ep.GetLeaf(), ep.Key, ep.Value)
 		if err != nil {
@@ -135,6 +138,10 @@ func getExistenceProof(cp *ics23.CommitmentProof) []*ics23.ExistenceProof {
 		}
 		if nep.Right != nil {
 			eps = append(eps, nep.Right)
+		}
+		fmt.Printf("nep: %d\n", len(eps))
+		for _, e := range eps {
+			fmt.Printf("%x\n", e.Key)
 		}
 	}
 	return eps

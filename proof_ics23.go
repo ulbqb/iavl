@@ -282,18 +282,20 @@ func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]*ics23.Commi
 		Key: key,
 	}
 
-	dupkey := []byte{}
-	keys := [][]byte{}
+	dupkey := KeysMap{}
+	keys := KeysMap{}
 	if idx >= 1 {
 		leftkey, _, err := t.GetByIndex(idx - 1)
 		if err != nil {
 			return nil, err
 		}
-		nonexist.Left, keys, err = t.createExistenceProofWithKey(leftkey)
+		var pkeys [][]byte
+		nonexist.Left, pkeys, err = t.createExistenceProofWithKey(leftkey)
 		if err != nil {
 			return nil, err
 		}
-		dupkey = leftkey
+		dupkey.Set(leftkey)
+		keys.SetKeys(pkeys)
 	}
 
 	// this will be nil if nothing right of the queried key
@@ -303,11 +305,13 @@ func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]*ics23.Commi
 	}
 
 	if rightkey != nil {
-		nonexist.Right, keys, err = t.createExistenceProofWithKey(rightkey)
+		var pkeys [][]byte
+		nonexist.Right, pkeys, err = t.createExistenceProofWithKey(rightkey)
 		if err != nil {
 			return nil, err
 		}
-		dupkey = rightkey
+		dupkey.Set(rightkey)
+		keys.SetKeys(pkeys)
 	}
 
 	proofs = append(proofs, &ics23.CommitmentProof{
@@ -316,11 +320,11 @@ func (t *ImmutableTree) GetNonMembershipProofWithKey(key []byte) ([]*ics23.Commi
 		},
 	})
 
-	for i := range keys {
-		if bytes.Equal(dupkey, keys[i]) {
+	for _, k := range keys.List() {
+		if dupkey.Has(k) {
 			continue
 		}
-		p, err := t.GetMembershipProof(keys[i])
+		p, err := t.GetMembershipProof(k)
 		if err != nil {
 			return nil, err
 		}
