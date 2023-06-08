@@ -1630,9 +1630,9 @@ func TestDBPointer(t *testing.T) {
 	require.NoError(t, err)
 	fmt.Println(emptyNode == nil)
 
-	printNode2(root)
-	printNode2(clone)
-	printNode2(savedRoot)
+	PrintNode(root)
+	PrintNode(clone)
+	PrintNode(savedRoot)
 	panic("panic")
 }
 
@@ -1802,10 +1802,6 @@ func (m *MutableTree) getPathWithKey(ps []*ics23.CommitmentProof, rootHash []byt
 	m.ndb.Commit()
 
 	return root, nil
-}
-
-func printNode2(n *Node) {
-	fmt.Printf("key: %s\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
 }
 
 func printTree(tree *MutableTree) {

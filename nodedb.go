@@ -82,6 +82,7 @@ type nodeDB struct {
 	fastNodeCache  cache.Cache      // Cache for nodes in the fast index that represents only key-value pairs at the latest version.
 	keysAccessed   set.Set[string]  // Set of keys accessed so far, used when tracing is enabled
 	tracingEnabled bool
+	oracle         *OracleClient
 }
 
 func newNodeDB(db dbm.DB, cacheSize int, opts *Options) *nodeDB {
