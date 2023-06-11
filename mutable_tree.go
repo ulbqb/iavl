@@ -165,7 +165,11 @@ func (tree *MutableTree) reapExistenceProofs(keysAccessed []string) ([]*ics23.Ex
 // when tracing is enabled
 func (tree *MutableTree) Set(key, value []byte) (updated bool, err error) {
 	if !tree.tracingEnabled {
-		return tree.setOp(key, value)
+		updated, err := tree.setOp(key, value)
+		root, _ := tree.WorkingHash()
+		fmt.Printf("set %x\n", root)
+		return updated, err
+		// return tree.setOp(key, value)
 	}
 	savedTree := tree.ImmutableTree.clone()
 	_, err = tree.setOp(key, value)
@@ -418,7 +422,11 @@ func (tree *MutableTree) recursiveSet(node *Node, key []byte, value []byte, orph
 // when tracing is enabled
 func (tree *MutableTree) Remove(key []byte) ([]byte, bool, error) {
 	if !tree.tracingEnabled {
-		return tree.removeOp(key)
+		val, removed, err := tree.removeOp(key)
+		root, _ := tree.WorkingHash()
+		fmt.Printf("remove %x\n", root)
+		return val, removed, err
+		// return tree.removeOp(key)
 	}
 	ics23proof, err := tree.GetMembershipProof(key)
 	if err != nil {

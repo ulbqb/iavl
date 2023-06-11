@@ -40,6 +40,7 @@ func (dst *StatelessTree) GetInitialRootHash() ([]byte, error) {
 	if dst.root == nil && dst.initialRootHash != nil {
 		return dst.initialRootHash, nil
 	}
+	// PrintTree3(dst.root)
 	return dst.WorkingHash()
 }
 
@@ -82,7 +83,11 @@ func (dst *StatelessTree) Set(key []byte, value []byte) (updated bool, err error
 	if err != nil {
 		return false, err
 	}
-	return dst.set(key, value)
+
+	updated, err = dst.set(key, value)
+	fmt.Printf("%x\n", dst.root.hash)
+	return
+	// return dst.set(key, value)
 }
 
 // Sets a key in the working tree with the given value.
@@ -213,7 +218,11 @@ func (dst *StatelessTree) Remove(key []byte) (value []byte, removed bool, err er
 	if err != nil {
 		return nil, false, err
 	}
-	return dst.remove(key)
+
+	value, removed, err = dst.remove(key)
+	fmt.Printf("%x\n", dst.root.hash)
+	return
+	// return dst.remove(key)
 }
 
 // Remove tries to remove a key from the tree and if removed, returns its
@@ -222,7 +231,8 @@ func (dst *StatelessTree) remove(key []byte) (value []byte, removed bool, err er
 	if dst.root == nil {
 		return nil, false, nil
 	}
-	newRootHash, newRoot, value, err := dst.recursiveRemove(dst.root, key)
+	orphans := dst.prepareOrphansSlice()
+	newRootHash, newRoot, _, value, err := dst.recursiveRemove(dst.root, key, &orphans)
 	if err != nil {
 		return nil, false, err
 	}
@@ -232,12 +242,14 @@ func (dst *StatelessTree) remove(key []byte) (value []byte, removed bool, err er
 	}
 
 	if newRoot == nil && newRootHash != nil {
-		newRoot, err = dst.ndb.GetNode(newRootHash)
+		dst.root, err = dst.ndb.GetNode(newRootHash)
 		if err != nil {
 			return nil, false, err
 		}
+	} else {
+		dst.root = newRoot
+		// dst.WorkingHash()
 	}
-	dst.root = newRoot
 
 	return value, true, nil
 }
@@ -247,85 +259,72 @@ func (dst *StatelessTree) remove(key []byte) (value []byte, removed bool, err er
 // - the hash of the new node (or nil if the node is the one removed)
 // - the node that replaces the orig. node after remove
 // - the removed value
-func (dst *StatelessTree) recursiveRemove(node *Node, key []byte) (newHash []byte, newSelf *Node, newValue []byte, err error) {
+func (dst *StatelessTree) recursiveRemove(node *Node, key []byte, orphans *[]*Node) (newHash []byte, newSelf *Node, newKey []byte, newValue []byte, err error) {
 	version := dst.version + 1
 
 	if node.isLeaf() {
 		if bytes.Equal(key, node.key) {
-			return nil, nil, nil, nil
+			*orphans = append(*orphans, node)
+			return nil, nil, nil, node.value, nil
 		}
-		return node.hash, node, nil, nil
+		return node.hash, node, nil, nil, nil
 	}
 
-	// Otherwise, node is inner node
-	node.version = version
-	// leftNode, rightNode := node.leftNode, node.rightNode
-	// leftNode, err := node.getLeftNode(dst.ImmutableTree)
-	// if err != nil {
-	// 	return nil, nil, nil, err
-	// }
-	// rightNode, err := node.getRightNode(dst.ImmutableTree)
-	// if err != nil {
-	// 	return nil, nil, nil, err
-	// }
-	// if leftNode == nil || rightNode == nil {
-	// 	return nil, nil, nil, fmt.Errorf("inner node must have at least one child node set")
-	// }
-	compare := bytes.Compare(key, node.key)
-
 	// node.key < key; we go to the left to find the key:
-	if compare < 0 {
+	if bytes.Compare(key, node.key) < 0 {
 		leftNode, err := node.getLeftNode(dst.ImmutableTree)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		newLeftHash, newLeftNode, newKey, err := dst.recursiveRemove(leftNode, key)
+		newLeftHash, newLeftNode, newKey, value, err := dst.recursiveRemove(leftNode, key, orphans)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
+		if len(*orphans) == 0 {
+			return node.hash, node, nil, value, nil
+		}
+		*orphans = append(*orphans, node)
 		if newLeftHash == nil && newLeftNode == nil { // left node held value, was removed
-			return node.rightHash, node.rightNode, node.key, nil
+			return node.rightHash, node.rightNode, node.key, value, nil
 		}
 
 		newNode, err := node.clone(version)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		newNode.leftHash, newNode.leftNode = newLeftHash, newLeftNode
 		err = newNode.calcHeightAndSize(dst.ImmutableTree)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		orphans := dst.prepareOrphansSlice()
-		newNode, err = dst.balance(newNode, &orphans)
+		newNode, err = dst.balance(newNode, orphans)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
-		err = recomputeHash(newNode)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-
-		return newNode.hash, newNode, newKey, nil
+		return newNode.hash, newNode, newKey, value, nil
 	} else {
 		rightNode, err := node.getRightNode(dst.ImmutableTree)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		newRightHash, newRightNode, newKey, err := dst.recursiveRemove(rightNode, key)
+		newRightHash, newRightNode, newKey, value, err := dst.recursiveRemove(rightNode, key, orphans)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
+		if len(*orphans) == 0 {
+			return node.hash, node, nil, value, nil
+		}
+		*orphans = append(*orphans, node)
 		if newRightHash == nil && newRightNode == nil { // right node held value, was removed
-			return node.leftHash, node.leftNode, nil, nil
+			return node.leftHash, node.leftNode, nil, value, nil
 		}
 
 		newNode, err := node.clone(version)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
 		newNode.rightHash, newNode.rightNode = newRightHash, newRightNode
@@ -334,20 +333,14 @@ func (dst *StatelessTree) recursiveRemove(node *Node, key []byte) (newHash []byt
 		}
 		err = newNode.calcHeightAndSize(dst.ImmutableTree)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
-		orphans := dst.prepareOrphansSlice()
-		newNode, err = dst.balance(newNode, &orphans)
+		newNode, err = dst.balance(newNode, orphans)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 
-		err = recomputeHash(newNode)
-		if err != nil {
-			return nil, nil, nil, err
-		}
-
-		return newNode.hash, newNode, nil, nil
+		return newNode.hash, newNode, nil, value, nil
 	}
 }
 
@@ -484,4 +477,22 @@ func printTree2(node *Node, index int, tree [][]string, width int) {
 	tree[index] = append(tree[index], fmt.Sprintf("%d %x", width, node.key))
 	printTree2(node.leftNode, index+1, tree, width)
 	printTree2(node.rightNode, index+1, tree, width+1)
+}
+
+func PrintTree3(node *Node) {
+	fmt.Println("graph TD;")
+	printTree3(node)
+}
+
+func printTree3(node *Node) {
+	if node == nil {
+		return
+	}
+	if node.isLeaf() {
+		return
+	}
+	fmt.Printf("	%x-->%x;\n", node.hash, node.leftHash)
+	fmt.Printf("	%x-->%x;\n", node.hash, node.rightHash)
+	printTree3(node.leftNode)
+	printTree3(node.rightNode)
 }
