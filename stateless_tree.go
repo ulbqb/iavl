@@ -248,7 +248,7 @@ func (dst *StatelessTree) remove(key []byte) (value []byte, removed bool, err er
 		}
 	} else {
 		dst.root = newRoot
-		// dst.WorkingHash()
+		dst.WorkingHash()
 	}
 
 	return value, true, nil
