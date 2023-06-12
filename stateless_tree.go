@@ -9,15 +9,15 @@ import (
 
 // Represents a IAVL Deep Subtree that can contain
 // a subset of nodes of an IAVL tree
-type WitnessTree struct {
+type StatelessTree struct {
 	*MutableTree
 	initialRootHash []byte // Initial Root Hash when Deep Subtree is initialized for an already existing tree
 }
 
-func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracleClient OracleClientI, storeName string) *WitnessTree {
+func NewStatelessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, version int64, oracleClient OracleClientI, storeName string) *StatelessTree {
 	ndb := newNodeDB(db, cacheSize, nil)
-	xOracleClient := NewOracleClient(oracleClient, storeName)
-	ndb.oracle = xOracleClient
+	xoc := NewOracleClient(oracleClient, storeName)
+	ndb.oracle = xoc
 	head := &ImmutableTree{ndb: ndb, version: version, skipFastStorageUpgrade: skipFastStorageUpgrade}
 	mutableTree := &MutableTree{
 		ImmutableTree:            head,
@@ -30,22 +30,21 @@ func NewWitnessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, versi
 		ndb:                      ndb,
 		skipFastStorageUpgrade:   skipFastStorageUpgrade,
 	}
-	rootHash := xOracleClient.GetRootHash()
-	fmt.Printf("store hash: %x\n", rootHash)
-	return &WitnessTree{MutableTree: mutableTree, initialRootHash: rootHash}
+	rootHash := xoc.GetRootHash()
+	return &StatelessTree{MutableTree: mutableTree, initialRootHash: rootHash}
 }
 
 // Returns the initial root hash if it is initialized and Deep Subtree root is nil.
 // Otherwise, returns the Deep Subtree working hash is considered the initial root hash.
-func (dst *WitnessTree) GetInitialRootHash() ([]byte, error) {
+func (dst *StatelessTree) GetInitialRootHash() ([]byte, error) {
 	if dst.root == nil && dst.initialRootHash != nil {
 		return dst.initialRootHash, nil
 	}
 	return dst.WorkingHash()
 }
 
-func (dst *WitnessTree) addProofs(key []byte) error {
-	nodes, accessed := dst.ndb.oracle.GetPathWithKey(key)
+func (dst *StatelessTree) addProofs(key []byte) error {
+	nodes, accessed := dst.ndb.oracle.GetNodesWithKey(key)
 
 	if accessed {
 		return nil
@@ -78,17 +77,16 @@ func (dst *WitnessTree) addProofs(key []byte) error {
 }
 
 // Verifies the Set operation with witness data and perform the given write operation
-func (dst *WitnessTree) Set(key []byte, value []byte) (updated bool, err error) {
+func (dst *StatelessTree) Set(key []byte, value []byte) (updated bool, err error) {
 	err = dst.addProofs(key)
 	if err != nil {
 		return false, err
 	}
-	PrintTree2(dst.root)
 	return dst.set(key, value)
 }
 
 // Sets a key in the working tree with the given value.
-func (dst *WitnessTree) set(key []byte, value []byte) (updated bool, err error) {
+func (dst *StatelessTree) set(key []byte, value []byte) (updated bool, err error) {
 	if value == nil {
 		return updated, fmt.Errorf("attempt to store nil value at key '%s'", key)
 	}
@@ -100,17 +98,15 @@ func (dst *WitnessTree) set(key []byte, value []byte) (updated bool, err error) 
 
 	dst.root, updated, err = dst.recursiveSet(dst.root, key, value)
 	if err != nil {
-		fmt.Println(err)
 		return updated, err
 	}
 	err = recomputeHash(dst.root)
-	fmt.Printf("set #%d %x\n", dst.root.version, dst.root.hash)
 	return updated, err
 }
 
 // Helper method for set to traverse and find the node with given key
 // recursively.
-func (dst *WitnessTree) recursiveSet(node *Node, key []byte, value []byte) (
+func (dst *StatelessTree) recursiveSet(node *Node, key []byte, value []byte) (
 	newSelf *Node, updated bool, err error,
 ) {
 	version := dst.version + 1
@@ -193,7 +189,7 @@ func (dst *WitnessTree) recursiveSet(node *Node, key []byte, value []byte) (
 }
 
 // Verifies the Get operation with witness data and perform the given read operation
-func (dst *WitnessTree) Get(key []byte) (value []byte, err error) {
+func (dst *StatelessTree) Get(key []byte) (value []byte, err error) {
 	err = dst.addProofs(key)
 	if err != nil {
 		return nil, err
@@ -203,7 +199,7 @@ func (dst *WitnessTree) Get(key []byte) (value []byte, err error) {
 
 // Get returns the value of the specified key if it exists, or nil otherwise.
 // The returned value must not be modified, since it may point to data stored within IAVL.
-func (dst *WitnessTree) get(key []byte) ([]byte, error) {
+func (dst *StatelessTree) get(key []byte) ([]byte, error) {
 	if dst.root == nil {
 		return nil, nil
 	}
@@ -212,7 +208,7 @@ func (dst *WitnessTree) get(key []byte) ([]byte, error) {
 }
 
 // Verifies the Remove operation with witness data and perform the given delete operation
-func (dst *WitnessTree) Remove(key []byte) (value []byte, removed bool, err error) {
+func (dst *StatelessTree) Remove(key []byte) (value []byte, removed bool, err error) {
 	err = dst.addProofs(key)
 	if err != nil {
 		return nil, false, err
@@ -222,7 +218,7 @@ func (dst *WitnessTree) Remove(key []byte) (value []byte, removed bool, err erro
 
 // Remove tries to remove a key from the tree and if removed, returns its
 // value, and 'true'.
-func (dst *WitnessTree) remove(key []byte) (value []byte, removed bool, err error) {
+func (dst *StatelessTree) remove(key []byte) (value []byte, removed bool, err error) {
 	if dst.root == nil {
 		return nil, false, nil
 	}
@@ -251,7 +247,7 @@ func (dst *WitnessTree) remove(key []byte) (value []byte, removed bool, err erro
 // - the hash of the new node (or nil if the node is the one removed)
 // - the node that replaces the orig. node after remove
 // - the removed value
-func (dst *WitnessTree) recursiveRemove(node *Node, key []byte) (newHash []byte, newSelf *Node, newValue []byte, err error) {
+func (dst *StatelessTree) recursiveRemove(node *Node, key []byte) (newHash []byte, newSelf *Node, newValue []byte, err error) {
 	version := dst.version + 1
 
 	if node.isLeaf() {
@@ -394,9 +390,6 @@ func (dst *ImmutableTree) recursiveNodeLink(node *Node) error {
 			node.rightNode, err = dst.ndb.GetNode(node.rightHash)
 			if err != nil {
 				return err
-			}
-			if node.rightNode != nil {
-				fmt.Printf("aaaaa %x\n", node.rightNode.key)
 			}
 		}
 	}

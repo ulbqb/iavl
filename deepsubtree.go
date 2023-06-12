@@ -156,7 +156,7 @@ func (dst *DeepSubTree) verifyOperationAndProofs(operation Operation, key []byte
 	if traceOp.Operation != operation || !bytes.Equal(traceOp.Key, key) || !bytes.Equal(traceOp.Value, value) {
 		return fmt.Errorf(
 			"traceOp in witnessData (%s, %s, %s) does not match up with executed operation (%s, %s, %s)",
-			traceOp.Operation, string(traceOp.Key), string(traceOp.Value),
+			traceOp.Operation, string(traceOp.Key), string(traceOp.Value), 
 			operation, string(key), string(value),
 		)
 	}

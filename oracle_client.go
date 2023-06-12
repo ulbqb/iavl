@@ -34,24 +34,22 @@ func (c *OracleClient) GetProof(path, data string) ([]*ics23.CommitmentProof, bo
 }
 
 func (c *OracleClient) GetRootHash() []byte {
-	proofs, _ := c.GetProof(fmt.Sprintf("%s/key", c.storeName), hex.EncodeToString([]byte("roothash")))
+	proofs, _ := c.GetProof(keyPath(c.storeName), dataString([]byte("roothash")))
 	rootHash := proofs[len(proofs)-1].GetExist().Value
 	return rootHash
 }
 
-func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
-	ps, accessed := c.GetProof(fmt.Sprintf("%s/keys", c.storeName), hex.EncodeToString(key))
+func (c *OracleClient) GetNodesWithKey(key []byte) ([]*Node, bool) {
+	ps, accessed := c.GetProof(keysPath(c.storeName), dataString(key))
 	if accessed {
 		return nil, accessed
 	}
 
-	// rootHash := ps[len(ps)-1].GetExist().Value
 	ps = ps[:len(ps)-1]
 	eps := []*ics23.ExistenceProof{}
 	pnk := 0
 	ns := NodeSet{}
 	pns := NodeSet{}
-	// root := &Node{}
 
 	for i := range ps {
 		eps = append(eps, getExistenceProof(ps[i])...)
@@ -62,7 +60,6 @@ func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
 
 	for i := range eps {
 		ep := eps[i]
-		fmt.Printf("ep: %x\n", ep.Key)
 
 		leaf, err := fromLeafOp(ep.GetLeaf(), ep.Key, ep.Value)
 		if err != nil {
@@ -71,6 +68,7 @@ func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
 		ns.Set(leaf)
 		if i < pnk {
 			pns.Set(leaf)
+			c.accessedKey.Set(keysPath(c.storeName), dataString(leaf.key))
 		}
 		prevHash := leaf.hash
 
@@ -101,9 +99,6 @@ func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
 
 	for i := range pns {
 		n := pns[i]
-		// if bytes.Equal(rootHash, n.hash) {
-		// 	root = n
-		// }
 		n.key = n.getNodeKey()
 	}
 
@@ -113,17 +108,6 @@ func (c *OracleClient) GetPathWithKey(key []byte) ([]*Node, bool) {
 		n.rightNode = nil
 	}
 
-	// for i := range pns {
-	// 	n := pns[i]
-	// 	if !pns.Has(n.leftHash) {
-	// 		n.leftNode = nil
-	// 	}
-	// 	if !pns.Has(n.rightHash) {
-	// 		n.rightNode = nil
-	// 	}
-	// }
-
-	// return root, false
 	return pns.List(), false
 }
 
@@ -140,12 +124,20 @@ func getExistenceProof(cp *ics23.CommitmentProof) []*ics23.ExistenceProof {
 		if nep.Right != nil {
 			eps = append(eps, nep.Right)
 		}
-		fmt.Printf("nep: %d\n", len(eps))
-		for _, e := range eps {
-			fmt.Printf("%x\n", e.Key)
-		}
 	}
 	return eps
+}
+
+func dataString(b []byte) string {
+	return hex.EncodeToString(b)
+}
+
+func keyPath(store string) string {
+	return fmt.Sprintf("%s/key", store)
+}
+
+func keysPath(store string) string {
+	return fmt.Sprintf("%s/keys", store)
 }
 
 type NodeSet map[string]*Node

@@ -477,10 +477,8 @@ func (node *Node) getLeftNode(t *ImmutableTree) (*Node, error) {
 		node.addTrace(t, node.leftNode.key)
 		return node.leftNode, nil
 	} else if t.ndb.oracle != nil {
-		// PrintTree2(t.root)
 		leftNodeFetchableKey := t.root.getLeftNodeFetchableKey(node)
-		nodes, accessed := t.ndb.oracle.GetPathWithKey(leftNodeFetchableKey)
-		fmt.Printf("leftNodeFetchableKey: %x %d\n", leftNodeFetchableKey, len(nodes))
+		nodes, accessed := t.ndb.oracle.GetNodesWithKey(leftNodeFetchableKey)
 		if accessed {
 			panic("something wrong")
 		}
@@ -492,13 +490,13 @@ func (node *Node) getLeftNode(t *ImmutableTree) (*Node, error) {
 		if err != nil {
 			return nil, err
 		}
-		fmt.Println(node.leftNode == nil)
 		return node.leftNode, nil
 	}
 	leftNode, err := t.ndb.GetNode(node.leftHash)
 	if err != nil {
 		return nil, err
 	}
+
 	return leftNode, nil
 }
 
@@ -507,7 +505,7 @@ func (node *Node) getRightNode(t *ImmutableTree) (*Node, error) {
 		node.addTrace(t, node.rightNode.key)
 		return node.rightNode, nil
 	} else if t.ndb.oracle != nil {
-		nodes, accessed := t.ndb.oracle.GetPathWithKey(node.key)
+		nodes, accessed := t.ndb.oracle.GetNodesWithKey(node.key)
 		if accessed {
 			panic("something wrong")
 		}
@@ -592,16 +590,12 @@ func (node *Node) getLeftNodeFetchableKey(parent *Node) []byte {
 	buf := node
 	leftNodeFetchableKey := []byte{0x00}
 	for {
-		fmt.Println(buf.isLeaf())
-		fmt.Printf("%v %v\n", buf.key, parent.key)
 		if bytes.Equal(buf.hash, parent.hash) {
 			break
 		}
 		if bytes.Compare(buf.key, parent.key) > 0 {
-			fmt.Println("right")
 			buf = buf.leftNode
 		} else {
-			fmt.Println("left")
 			leftNodeFetchableKey = buf.key
 			buf = buf.rightNode
 		}
