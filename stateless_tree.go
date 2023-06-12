@@ -2,9 +2,17 @@ package iavl
 
 import (
 	"bytes"
+	"encoding/binary"
+	"errors"
 	"fmt"
 
+	ics23 "github.com/confio/ics23/go"
 	dbm "github.com/tendermint/tm-db"
+)
+
+const (
+	// lengthByte is the length prefix prepended to each of the sha256 sub-hashes
+	lengthByte byte = 0x20
 )
 
 // Represents a IAVL Deep Subtree that can contain
@@ -336,6 +344,148 @@ func (dst *StatelessTree) recursiveRemove(node *Node, key []byte, orphans *[]*No
 
 		return newNode.hash, newNode, nil, value, nil
 	}
+}
+
+func recomputeHash(node *Node) error {
+	if node.leftHash == nil && node.leftNode != nil {
+		leftHash, err := node.leftNode._hash()
+		if err != nil {
+			return err
+		}
+		node.leftHash = leftHash
+	}
+	if node.rightHash == nil && node.rightNode != nil {
+		rightHash, err := node.rightNode._hash()
+		if err != nil {
+			return err
+		}
+		node.rightHash = rightHash
+	}
+	node.hash = nil
+	_, err := node._hash()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func fromLeafOp(lop *ics23.LeafOp, key, value []byte) (*Node, error) {
+	r := bytes.NewReader(lop.Prefix)
+	height, err := binary.ReadVarint(r)
+	if err != nil {
+		return nil, err
+	}
+	if height != 0 {
+		return nil, errors.New("height should be 0 in the leaf")
+	}
+	size, err := binary.ReadVarint(r)
+	if err != nil {
+		return nil, err
+	}
+	if size != 1 {
+		return nil, errors.New("size should be 1 in the leaf")
+	}
+	version, err := binary.ReadVarint(r)
+	if err != nil {
+		return nil, err
+	}
+	node := &Node{
+		key:     key,
+		value:   value,
+		size:    size,
+		version: version,
+	}
+
+	_, err = node._hash()
+	if err != nil {
+		return nil, err
+	}
+
+	return node, nil
+}
+
+func fromInnerOp(iop *ics23.InnerOp, prevHash []byte) (*Node, error) {
+	r := bytes.NewReader(iop.Prefix)
+	height, err := binary.ReadVarint(r)
+	if err != nil {
+		return nil, err
+	}
+	size, err := binary.ReadVarint(r)
+	if err != nil {
+		return nil, err
+	}
+	version, err := binary.ReadVarint(r)
+	if err != nil {
+		return nil, err
+	}
+
+	b, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+	if b != lengthByte {
+		return nil, errors.New("expected length byte (0x20")
+	}
+	var left, right []byte
+	// if left is empty, skip to right
+	if r.Len() != 0 {
+		left = make([]byte, lengthByte)
+		n, err := r.Read(left)
+		if err != nil {
+			return nil, err
+		}
+		if n != 32 {
+			return nil, errors.New("couldn't read left hash")
+		}
+		b, err = r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b != lengthByte {
+			return nil, errors.New("expected length byte (0x20")
+		}
+	}
+
+	if len(iop.Suffix) > 0 {
+		right = make([]byte, lengthByte)
+		r = bytes.NewReader(iop.Suffix)
+		b, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		if b != lengthByte {
+			return nil, errors.New("expected length byte (0x20")
+		}
+
+		n, err := r.Read(right)
+		if err != nil {
+			return nil, err
+		}
+		if n != 32 {
+			return nil, errors.New("couldn't read right hash")
+		}
+	}
+
+	if left == nil {
+		left = prevHash
+	} else if right == nil {
+		right = prevHash
+	}
+
+	node := &Node{
+		leftHash:  left,
+		rightHash: right,
+		version:   version,
+		size:      size,
+		height:    int8(height),
+	}
+
+	_, err = node._hash()
+	if err != nil {
+		return nil, err
+	}
+
+	return node, nil
 }
 
 func (dst *ImmutableTree) saveNode(node *Node) error {
