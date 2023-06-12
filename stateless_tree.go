@@ -84,10 +84,7 @@ func (dst *StatelessTree) Set(key []byte, value []byte) (updated bool, err error
 		return false, err
 	}
 
-	updated, err = dst.set(key, value)
-	fmt.Printf("%x\n", dst.root.hash)
-	return
-	// return dst.set(key, value)
+	return dst.set(key, value)
 }
 
 // Sets a key in the working tree with the given value.
@@ -219,10 +216,7 @@ func (dst *StatelessTree) Remove(key []byte) (value []byte, removed bool, err er
 		return nil, false, err
 	}
 
-	value, removed, err = dst.remove(key)
-	fmt.Printf("%x\n", dst.root.hash)
-	return
-	// return dst.remove(key)
+	return dst.remove(key)
 }
 
 // Remove tries to remove a key from the tree and if removed, returns its
