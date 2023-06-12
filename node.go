@@ -477,12 +477,12 @@ func (node *Node) getLeftNode(t *ImmutableTree) (*Node, error) {
 		node.addTrace(t, node.leftNode.key)
 		return node.leftNode, nil
 	} else if t.ndb.oracle != nil {
-		leftNodeFetchableKey := t.root.getLeftNodeFetchableKey(node)
-		nodes, accessed := t.ndb.oracle.GetNodesWithKey(leftNodeFetchableKey)
+		leftNode, accessed := t.ndb.oracle.GetNode(node.leftHash)
 		if accessed {
 			panic("something wrong")
 		}
-		err := t.saveNodes(nodes)
+
+		err := t.saveNode(leftNode)
 		if err != nil {
 			return nil, err
 		}
@@ -505,11 +505,12 @@ func (node *Node) getRightNode(t *ImmutableTree) (*Node, error) {
 		node.addTrace(t, node.rightNode.key)
 		return node.rightNode, nil
 	} else if t.ndb.oracle != nil {
-		nodes, accessed := t.ndb.oracle.GetNodesWithKey(node.key)
+		rightNode, accessed := t.ndb.oracle.GetNode(node.rightHash)
 		if accessed {
 			panic("something wrong")
 		}
-		err := t.saveNodes(nodes)
+
+		err := t.saveNode(rightNode)
 		if err != nil {
 			return nil, err
 		}
@@ -584,26 +585,6 @@ func (node *Node) traverseInRange(tree *ImmutableTree, start, end []byte, ascend
 		}
 	}
 	return stop
-}
-
-func (node *Node) getLeftNodeFetchableKey(parent *Node) []byte {
-	buf := node
-	leftNodeFetchableKey := []byte{0x00}
-	for {
-		if bytes.Equal(buf.hash, parent.hash) {
-			break
-		}
-		if bytes.Compare(buf.key, parent.key) > 0 {
-			buf = buf.leftNode
-		} else {
-			leftNodeFetchableKey = buf.key
-			buf = buf.rightNode
-		}
-		if buf == nil {
-			panic("something wrong")
-		}
-	}
-	return leftNodeFetchableKey
 }
 
 var (

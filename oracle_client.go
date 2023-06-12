@@ -1,6 +1,7 @@
 package iavl
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 
@@ -34,13 +35,13 @@ func (c *OracleClient) GetProof(path, data string) ([]*ics23.CommitmentProof, bo
 }
 
 func (c *OracleClient) GetRootHash() []byte {
-	proofs, _ := c.GetProof(keyPath(c.storeName), dataString([]byte("roothash")))
+	proofs, _ := c.GetProof(c.keyPath(), dataString([]byte("roothash")))
 	rootHash := proofs[len(proofs)-1].GetExist().Value
 	return rootHash
 }
 
 func (c *OracleClient) GetNodesWithKey(key []byte) ([]*Node, bool) {
-	ps, accessed := c.GetProof(keysPath(c.storeName), dataString(key))
+	ps, accessed := c.GetProof(c.keysPath(), dataString(key))
 	if accessed {
 		return nil, accessed
 	}
@@ -68,7 +69,7 @@ func (c *OracleClient) GetNodesWithKey(key []byte) ([]*Node, bool) {
 		ns.Set(leaf)
 		if i < pnk {
 			pns.Set(leaf)
-			c.accessedKey.Set(keysPath(c.storeName), dataString(leaf.key))
+			c.accessedKey.Set(c.keysPath(), dataString(leaf.key))
 		}
 		prevHash := leaf.hash
 
@@ -111,6 +112,51 @@ func (c *OracleClient) GetNodesWithKey(key []byte) ([]*Node, bool) {
 	return pns.List(), false
 }
 
+func (c *OracleClient) GetNode(hash []byte) (*Node, bool) {
+	proofs, accessed := c.GetProof(c.nodePath(), dataString(hash))
+	if accessed {
+		return nil, accessed
+	}
+
+	proof := proofs[0]
+	var node *Node
+
+	ep := getExistenceProof(proof)[0]
+
+	leaf, err := fromLeafOp(ep.GetLeaf(), ep.Key, ep.Value)
+	if err != nil {
+		panic(err)
+	}
+	c.accessedKey.Set(c.keysPath(), dataString(leaf.key))
+	if bytes.Equal(hash, leaf.hash) {
+		node = leaf
+	}
+
+	if node == nil {
+		prevHash := leaf.hash
+		path := ep.GetPath()
+		for j := range path {
+			inner, err := fromInnerOp(path[j], prevHash)
+			if err != nil {
+				panic(err)
+			}
+			if bytes.Equal(hash, inner.hash) {
+				node = inner
+				break
+			}
+			prevHash = inner.hash
+		}
+	}
+
+	if node == nil {
+		panic("something wrong")
+	} else {
+		node.key = leaf.key
+	}
+
+	return node, false
+}
+
 func getExistenceProof(cp *ics23.CommitmentProof) []*ics23.ExistenceProof {
 	eps := []*ics23.ExistenceProof{}
 	switch cp.GetProof().(type) {
@@ -128,16 +174,20 @@ func getExistenceProof(cp *ics23.CommitmentProof) []*ics23.ExistenceProof {
 	return eps
 }
 
+func (c *OracleClient) keyPath() string {
+	return fmt.Sprintf("%s/key", c.storeName)
+}
+
+func (c *OracleClient) keysPath() string {
+	return fmt.Sprintf("%s/keys", c.storeName)
+}
+
+func (c *OracleClient) nodePath() string {
+	return fmt.Sprintf("%s/node", c.storeName)
+}
+
 func dataString(b []byte) string {
 	return hex.EncodeToString(b)
-}
-
-func keyPath(store string) string {
-	return fmt.Sprintf("%s/key", store)
-}
-
-func keysPath(store string) string {
-	return fmt.Sprintf("%s/keys", store)
 }
 
 type NodeSet map[string]*Node

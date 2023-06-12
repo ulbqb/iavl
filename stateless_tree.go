@@ -259,14 +259,22 @@ func (dst *StatelessTree) recursiveRemove(node *Node, key []byte) (newHash []byt
 
 	// Otherwise, node is inner node
 	node.version = version
-	leftNode, rightNode := node.leftNode, node.rightNode
-	if leftNode == nil && rightNode == nil {
-		return nil, nil, nil, fmt.Errorf("inner node must have at least one child node set")
-	}
+	// leftNode, rightNode := node.leftNode, node.rightNode
+	// leftNode, err := node.getLeftNode(dst.ImmutableTree)
+	// if err != nil {
+	// 	return nil, nil, nil, err
+	// }
+	// rightNode, err := node.getRightNode(dst.ImmutableTree)
+	// if err != nil {
+	// 	return nil, nil, nil, err
+	// }
+	// if leftNode == nil || rightNode == nil {
+	// 	return nil, nil, nil, fmt.Errorf("inner node must have at least one child node set")
+	// }
 	compare := bytes.Compare(key, node.key)
 
 	// node.key < key; we go to the left to find the key:
-	if leftNode != nil && (compare < 0 || rightNode == nil) {
+	if compare < 0 {
 		leftNode, err := node.getLeftNode(dst.ImmutableTree)
 		if err != nil {
 			return nil, nil, nil, err
@@ -296,8 +304,17 @@ func (dst *StatelessTree) recursiveRemove(node *Node, key []byte) (newHash []byt
 			return nil, nil, nil, err
 		}
 
+		err = recomputeHash(newNode)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
 		return newNode.hash, newNode, newKey, nil
-	} else if rightNode != nil && (compare >= 0 || leftNode == nil) {
+	} else {
+		rightNode, err := node.getRightNode(dst.ImmutableTree)
+		if err != nil {
+			return nil, nil, nil, err
+		}
 		newRightHash, newRightNode, newKey, err := dst.recursiveRemove(rightNode, key)
 		if err != nil {
 			return nil, nil, nil, err
@@ -325,9 +342,33 @@ func (dst *StatelessTree) recursiveRemove(node *Node, key []byte) (newHash []byt
 			return nil, nil, nil, err
 		}
 
+		err = recomputeHash(newNode)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
 		return newNode.hash, newNode, nil, nil
 	}
-	return nil, nil, nil, fmt.Errorf("node with key: %s not found", key)
+}
+
+func (dst *ImmutableTree) saveNode(node *Node) error {
+	has, err := dst.ndb.Has(node.hash)
+	if err != nil {
+		return err
+	}
+	if !has {
+		err = dst.ndb.SaveNode(node)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = dst.ndb.Commit()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (dst *ImmutableTree) saveNodes(nodes []*Node) error {
@@ -420,7 +461,7 @@ func (node *Node) getNodeKey() []byte {
 }
 
 func PrintNode(n *Node) {
-	fmt.Printf("key: %s\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
+	fmt.Printf("key: %v\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
 }
 
 func PrintTree2(node *Node) {
