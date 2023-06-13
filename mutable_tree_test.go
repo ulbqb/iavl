@@ -1803,6 +1803,23 @@ func (m *MutableTree) getPathWithKey(ps []*ics23.CommitmentProof, rootHash []byt
 	return root, nil
 }
 
+// GetProof gets the proof for the given key.
+func (t *ImmutableTree) GetProof(key []byte) (*ics23.CommitmentProof, error) {
+	if t.root == nil {
+		return nil, fmt.Errorf("cannot generate the proof with nil root")
+	}
+
+	exist, err := t.Has(key)
+	if err != nil {
+		return nil, err
+	}
+
+	if exist {
+		return t.GetMembershipProof(key)
+	}
+	return t.GetNonMembershipProof(key)
+}
+
 func printTree(tree *MutableTree) {
 	strTree := make([][]string, tree.root.height+1)
 	leftDepthpriority(tree, tree.root, strTree, 0)
