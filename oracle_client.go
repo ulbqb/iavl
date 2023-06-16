@@ -155,7 +155,6 @@ func (c *OracleClient) GetNode(hash []byte) (*Node, bool) {
 	if err != nil {
 		panic(err)
 	}
-	c.accessedKey.Set(c.keysPath(), dataString(leaf.key))
 	if bytes.Equal(hash, leaf.hash) {
 		node = leaf
 	}
