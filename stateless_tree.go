@@ -48,7 +48,6 @@ func (dst *StatelessTree) GetInitialRootHash() ([]byte, error) {
 	if dst.root == nil && dst.initialRootHash != nil {
 		return dst.initialRootHash, nil
 	}
-	// PrintTree3(dst.root)
 	return dst.WorkingHash()
 }
 
@@ -601,34 +600,12 @@ func PrintNode(n *Node) {
 	fmt.Printf("key: %v\nvalue: %x\nhash: %x\nleftHash: %x\nrightHash: %x\nheight: %d\nleftNode: %v\nrightNode:%v\n\n", n.key, n.value, n.hash, n.leftHash, n.rightHash, n.height, n.leftNode != nil, n.rightNode != nil)
 }
 
-func PrintTree2(node *Node) {
-	tree := make([][]string, node.height+3)
-	printTree2(node, 0, tree, 0)
-	for _, t := range tree {
-		fmt.Println(t)
-	}
-}
-
-func printTree2(node *Node, index int, tree [][]string, width int) {
-	if node == nil {
-		tree[index] = append(tree[index], fmt.Sprintf("%d: empty", width))
-		return
-	}
-	if node.isLeaf() {
-		tree[index] = append(tree[index], fmt.Sprintf("leaf: %x", node.key))
-		return
-	}
-	tree[index] = append(tree[index], fmt.Sprintf("%d %x", width, node.key))
-	printTree2(node.leftNode, index+1, tree, width)
-	printTree2(node.rightNode, index+1, tree, width+1)
-}
-
-func PrintTree3(node *Node) {
+func PrintTreeForMermaid(node *Node) {
 	fmt.Println("graph TD;")
-	printTree3(node)
+	recursivePrintTree(node)
 }
 
-func printTree3(node *Node) {
+func recursivePrintTree(node *Node) {
 	if node == nil {
 		return
 	}
@@ -637,6 +614,6 @@ func printTree3(node *Node) {
 	}
 	fmt.Printf("	%x-->%x;\n", node.hash, node.leftHash)
 	fmt.Printf("	%x-->%x;\n", node.hash, node.rightHash)
-	printTree3(node.leftNode)
-	printTree3(node.rightNode)
+	recursivePrintTree(node.leftNode)
+	recursivePrintTree(node.rightNode)
 }
