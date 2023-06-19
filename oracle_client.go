@@ -3,6 +3,7 @@ package iavl
 import (
 	"bytes"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/url"
 
@@ -32,14 +33,13 @@ func NewOracleClient(oracle OracleClientI, storeName string) *OracleClient {
 	}
 }
 
-func (c *OracleClient) query(path, data string) *abci.ResponseQuery {
-	d := c.oracle.Get([]byte(fmt.Sprintf("abci_query?path=%s&data=%s", url.PathEscape(path), data)))
-	q := abci.ResponseQuery{}
-	err := q.Unmarshal(d)
-	if err != nil {
+func (c *OracleClient) query(path, data string) *resultABCIQuery {
+	b := c.oracle.Get([]byte(fmt.Sprintf("abci_query?path=%s&data=%s", url.PathEscape(path), data)))
+	result := resultABCIQuery{}
+	if err := json.Unmarshal(b, &result); err != nil {
 		panic(err)
 	}
-	return &q
+	return &result
 }
 
 func (c *OracleClient) getProof(path, data string) ([]*ics23.CommitmentProof, bool) {
@@ -48,7 +48,7 @@ func (c *OracleClient) getProof(path, data string) ([]*ics23.CommitmentProof, bo
 	}
 	c.accessedKey.Set(path, data)
 
-	q := c.query("store/"+path, data)
+	q := c.query("store/"+path, data).Response
 	ops := make([]*crypto.ProofOp, len(q.ProofOps.Ops))
 	for i := range q.ProofOps.Ops {
 		op := q.ProofOps.Ops[i]
@@ -358,4 +358,8 @@ func commitmentOpDecoder(pop crypto.ProofOp) (merkle.ProofOperator, error) {
 
 func dataString(b []byte) string {
 	return hex.EncodeToString(b)
+}
+
+type resultABCIQuery struct {
+	Response abci.ResponseQuery `json:"response"`
 }
