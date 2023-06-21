@@ -38,8 +38,31 @@ func NewStatelessTree(db dbm.DB, cacheSize int, skipFastStorageUpgrade bool, ver
 		ndb:                      ndb,
 		skipFastStorageUpgrade:   skipFastStorageUpgrade,
 	}
+
+	// get root hash
 	rootHash := xoc.GetRootHash()
-	return &StatelessTree{MutableTree: mutableTree, initialRootHash: rootHash}
+	tree := &StatelessTree{MutableTree: mutableTree, initialRootHash: rootHash}
+
+	// get initial root node
+	rootNode, accessed := tree.ndb.oracle.GetNode(rootHash)
+	if accessed {
+		panic("something wrong")
+	}
+
+	if rootNode == nil {
+		return tree
+	}
+
+	err := tree.saveNode(rootNode)
+	if err != nil {
+		panic("something wrong")
+	}
+	tree.root, err = tree.ndb.GetNode(rootHash)
+	if err != nil {
+		panic("something wrong")
+	}
+
+	return tree
 }
 
 // Returns the initial root hash if it is initialized and Deep Subtree root is nil.
@@ -51,42 +74,8 @@ func (dst *StatelessTree) GetInitialRootHash() ([]byte, error) {
 	return dst.WorkingHash()
 }
 
-func (dst *StatelessTree) addProofs(key []byte) error {
-	nodes, accessed := dst.ndb.oracle.GetNodesWithKey(key)
-
-	if accessed {
-		return nil
-	}
-
-	err := dst.saveNodes(nodes)
-	if err != nil {
-		return err
-	}
-
-	if dst.root == nil {
-		rootHash, err := dst.GetInitialRootHash()
-		if err != nil {
-			return err
-		}
-		root, err := dst.ndb.GetNode(rootHash)
-		if err != nil {
-			return err
-		}
-		dst.root = root
-	}
-
-	err = dst.recursiveNodeLink(dst.root)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // Verifies the Set operation with witness data and perform the given write operation
 func (dst *StatelessTree) Set(key []byte, value []byte) (updated bool, err error) {
-	err = dst.addProofs(key)
 	if err != nil {
 		return false, err
 	}
@@ -151,13 +140,11 @@ func (dst *StatelessTree) recursiveSet(node *Node, key []byte, value []byte) (
 	}
 	// Otherwise, node is inner node
 	node.version = version
-	leftNode, rightNode := node.leftNode, node.rightNode
-	if leftNode == nil && rightNode == nil {
-		return nil, false, fmt.Errorf("inner node must have at least one child node set")
-	}
-	compare := bytes.Compare(key, node.key)
-	switch {
-	case leftNode != nil && (compare < 0 || rightNode == nil):
+	if bytes.Compare(key, node.key) < 0 {
+		leftNode, err := node.getLeftNode(dst.ImmutableTree)
+		if err != nil {
+			return nil, false, err
+		}
 		node.leftNode, updated, err = dst.recursiveSet(leftNode, key, value)
 		if err != nil {
 			return nil, updated, err
@@ -167,7 +154,11 @@ func (dst *StatelessTree) recursiveSet(node *Node, key []byte, value []byte) (
 			return nil, updated, hashErr
 		}
 		node.leftHash = node.leftNode.hash
-	case rightNode != nil && (compare >= 0 || leftNode == nil):
+	} else {
+		rightNode, err := node.getRightNode(dst.ImmutableTree)
+		if err != nil {
+			return nil, false, err
+		}
 		node.rightNode, updated, err = dst.recursiveSet(rightNode, key, value)
 		if err != nil {
 			return nil, updated, err
@@ -177,9 +168,8 @@ func (dst *StatelessTree) recursiveSet(node *Node, key []byte, value []byte) (
 			return nil, updated, hashErr
 		}
 		node.rightHash = node.rightNode.hash
-	default:
-		return nil, false, fmt.Errorf("inner node does not have key set correctly")
 	}
+
 	if updated {
 		return node, updated, nil
 	}
@@ -199,7 +189,6 @@ func (dst *StatelessTree) recursiveSet(node *Node, key []byte, value []byte) (
 
 // Verifies the Get operation with witness data and perform the given read operation
 func (dst *StatelessTree) Get(key []byte) (value []byte, err error) {
-	err = dst.addProofs(key)
 	if err != nil {
 		return nil, err
 	}
@@ -218,7 +207,6 @@ func (dst *StatelessTree) get(key []byte) ([]byte, error) {
 
 // Verifies the Remove operation with witness data and perform the given delete operation
 func (dst *StatelessTree) Remove(key []byte) (value []byte, removed bool, err error) {
-	err = dst.addProofs(key)
 	if err != nil {
 		return nil, false, err
 	}
@@ -500,29 +488,6 @@ func (dst *ImmutableTree) saveNode(node *Node) error {
 	}
 
 	err = dst.ndb.Commit()
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (dst *ImmutableTree) saveNodes(nodes []*Node) error {
-	for i := range nodes {
-		n := nodes[i]
-		has, err := dst.ndb.Has(n.hash)
-		if err != nil {
-			return err
-		}
-		if !has {
-			err = dst.ndb.SaveNode(n)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	err := dst.ndb.Commit()
 	if err != nil {
 		return err
 	}

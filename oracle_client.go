@@ -3,13 +3,13 @@ package iavl
 import (
 	"bytes"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"net/url"
 
 	ics23 "github.com/confio/ics23/go"
 	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto/merkle"
+	tmjson "github.com/tendermint/tendermint/libs/json"
 	"github.com/tendermint/tendermint/proto/tendermint/crypto"
 )
 
@@ -36,7 +36,7 @@ func NewOracleClient(oracle OracleClientI, storeName string) *OracleClient {
 func (c *OracleClient) query(path, data string) *resultABCIQuery {
 	b := c.oracle.Get([]byte(fmt.Sprintf("abci_query?path=%s&data=%s", url.PathEscape(path), data)))
 	result := resultABCIQuery{}
-	if err := json.Unmarshal(b, &result); err != nil {
+	if err := tmjson.Unmarshal(b, &result); err != nil {
 		panic(err)
 	}
 	return &result
@@ -49,6 +49,12 @@ func (c *OracleClient) getProof(path, data string) ([]*ics23.CommitmentProof, bo
 	c.accessedKey.Set(path, data)
 
 	q := c.query("store/"+path, data).Response
+
+	// cannot get node from empty store
+	if q.ProofOps == nil {
+		return []*ics23.CommitmentProof{}, false
+	}
+
 	ops := make([]*crypto.ProofOp, len(q.ProofOps.Ops))
 	for i := range q.ProofOps.Ops {
 		op := q.ProofOps.Ops[i]
@@ -144,6 +150,10 @@ func (c *OracleClient) GetNode(hash []byte) (*Node, bool) {
 	proofs, accessed := c.getProof(c.nodePath(), dataString(hash))
 	if accessed {
 		return nil, accessed
+	}
+
+	if len(proofs) == 0 {
+		return nil, false
 	}
 
 	proof := proofs[0]
