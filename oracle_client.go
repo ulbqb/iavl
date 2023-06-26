@@ -192,7 +192,7 @@ func (c *OracleClient) GetNode(hash []byte) (*Node, bool) {
 	}
 
 	// TODO: this is work around so it need to check if it able to decode node value to empty byte array
-	if node.value == nil {
+	if node.isLeaf() && node.value == nil {
 		node.value = []byte{}
 	}
 
