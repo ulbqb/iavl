@@ -76,10 +76,6 @@ func (dst *StatelessTree) GetInitialRootHash() ([]byte, error) {
 
 // Verifies the Set operation with witness data and perform the given write operation
 func (dst *StatelessTree) Set(key []byte, value []byte) (updated bool, err error) {
-	if err != nil {
-		return false, err
-	}
-
 	return dst.set(key, value)
 }
 
@@ -189,9 +185,6 @@ func (dst *StatelessTree) recursiveSet(node *Node, key []byte, value []byte) (
 
 // Verifies the Get operation with witness data and perform the given read operation
 func (dst *StatelessTree) Get(key []byte) (value []byte, err error) {
-	if err != nil {
-		return nil, err
-	}
 	return dst.get(key)
 }
 
@@ -207,10 +200,6 @@ func (dst *StatelessTree) get(key []byte) ([]byte, error) {
 
 // Verifies the Remove operation with witness data and perform the given delete operation
 func (dst *StatelessTree) Remove(key []byte) (value []byte, removed bool, err error) {
-	if err != nil {
-		return nil, false, err
-	}
-
 	return dst.remove(key)
 }
 
